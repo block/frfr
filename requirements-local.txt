@@ -1,0 +1,14 @@
+# Core dependencies for local execution
+anthropic>=0.18.0
+pydantic>=2.0.0
+
+# Document processing
+pypdf2>=3.0.0
+pycryptodome>=3.20.0
+
+# CLI
+click>=8.1.0
+rich>=13.0.0
+
+# Utilities
+python-dotenv>=1.0.0

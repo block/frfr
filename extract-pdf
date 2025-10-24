@@ -1,0 +1,23 @@
+#!/bin/bash
+# Portable wrapper for PDF extraction
+# Usage: ./extract-pdf <pdf-filename> [output-filename]
+
+set -e
+
+PDF_FILE="${1:-test-doc.pdf}"
+OUTPUT_FILE="${2:-output/extracted_text.txt}"
+
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+echo "Extracting: $PDF_FILE"
+echo "Output: $OUTPUT_FILE"
+echo ""
+
+docker compose exec frfr frfr extract \
+    "/app/documents/$PDF_FILE" \
+    "/app/output/$(basename "$OUTPUT_FILE")"
+
+echo ""
+echo "✅ File available on host at: $SCRIPT_DIR/$OUTPUT_FILE"

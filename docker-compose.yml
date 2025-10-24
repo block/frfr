@@ -1,0 +1,87 @@
+services:
+  # Temporal server
+  temporal:
+    image: temporalio/auto-setup:latest
+    container_name: frfr-temporal
+    ports:
+      - "7233:7233"  # gRPC
+      - "8233:8233"  # Web UI
+    environment:
+      - DB=postgresql
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=postgres
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+    depends_on:
+      - postgres
+    networks:
+      - frfr-network
+    volumes:
+      - ./temporal-dynamicconfig:/etc/temporal/config/dynamicconfig
+
+  # PostgreSQL for Temporal
+  postgres:
+    image: postgres:15-alpine
+    container_name: frfr-postgres
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+      POSTGRES_DB: temporal
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - frfr-network
+
+  # Temporal Admin Tools (optional, for CLI access)
+  temporal-admin-tools:
+    image: temporalio/admin-tools:latest
+    container_name: frfr-temporal-admin
+    stdin_open: true
+    tty: true
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CLI_ADDRESS=temporal:7233
+    depends_on:
+      - temporal
+    networks:
+      - frfr-network
+
+  # Frfr application
+  frfr:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: frfr-app
+    stdin_open: true
+    tty: true
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    volumes:
+      # Mount code for development
+      - ./frfr:/app/frfr
+      - ./scripts:/app/scripts
+      - ./tests:/app/tests
+      # Mount session storage
+      - ./sessions:/app/.frfr_sessions
+      # Mount documents directory for easy access
+      - ./documents:/app/documents
+      # Mount output directory for processed results
+      - ./output:/app/output
+      # Mount Claude config for API key access
+      - ~/.claude:/root/.claude:ro
+    depends_on:
+      - temporal
+    networks:
+      - frfr-network
+    command: bash
+
+networks:
+  frfr-network:
+    driver: bridge
+
+volumes:
+  postgres-data:

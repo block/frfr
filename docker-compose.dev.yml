@@ -1,0 +1,37 @@
+# Development override for docker-compose
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+version: '3.8'
+
+services:
+  frfr:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    volumes:
+      # Mount entire project for hot reload
+      - .:/app
+      # Don't override Python packages
+      - /app/.eggs
+      - /app/*.egg-info
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - LOG_LEVEL=DEBUG
+    command: bash -c "pip install -e . && bash"
+
+  # Development tools container
+  dev-tools:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: frfr-dev-tools
+    stdin_open: true
+    tty: true
+    volumes:
+      - .:/app
+    networks:
+      - frfr-network
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+    command: bash

@@ -1,0 +1,28 @@
+#!/bin/bash
+# Setup authentication for Frfr
+
+set -e
+
+echo "=========================================="
+echo "Frfr Authentication Setup"
+echo "=========================================="
+echo ""
+echo "The API key needs to be in your shell environment."
+echo ""
+echo "Please run this command in your terminal:"
+echo ""
+echo "  export ANTHROPIC_API_KEY='your-api-key-here'"
+echo ""
+echo "To find your API key:"
+echo "  1. Go to https://console.anthropic.com/"
+echo "  2. Navigate to API Keys"
+echo "  3. Copy your key (starts with sk-ant-)"
+echo ""
+echo "Then restart the container:"
+echo "  cd ~/Development/frfr"
+echo "  docker compose restart frfr"
+echo ""
+echo "Or add it permanently to ~/.zshrc or ~/.bashrc:"
+echo "  echo 'export ANTHROPIC_API_KEY=\"sk-ant-...\"' >> ~/.zshrc"
+echo "  source ~/.zshrc"
+echo ""
