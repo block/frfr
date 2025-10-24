@@ -2,9 +2,9 @@
 
 High-confidence document Q&A system using LLM swarm consensus with hallucination detection and correction.
 
-> **Quick Links**: [🚀 Quick Start](QUICKSTART.md) | [Docker Guide](README.docker.md) | [Design Doc](DESIGN.md) | [All Docs](DOCS_INDEX.md)
+> **Quick Links**: [🚀 Quick Start](docs/QUICKSTART.md) | [Docker Guide](docs/README.docker.md) | [Design Doc](docs/DESIGN.md) | [All Docs](docs/DOCS_INDEX.md)
 
-**Ready to extract your PDF?** See [QUICKSTART.md](QUICKSTART.md) for a 3-command guide.
+**Ready to extract your PDF?** See [QUICKSTART.md](docs/QUICKSTART.md) for a 3-command guide.
 
 ## Overview
 
@@ -154,7 +154,7 @@ frfr/
 
 ### Docker Setup (Recommended)
 
-The easiest way to get started is with Docker. See [README.docker.md](README.docker.md) for full details.
+The easiest way to get started is with Docker. See [README.docker.md](docs/README.docker.md) for full details.
 
 ```bash
 # Clone repository
@@ -202,7 +202,7 @@ pip install -e .
 ## Setup
 
 ### Docker
-All services start automatically with `make up`. See [README.docker.md](README.docker.md).
+All services start automatically with `make up`. See [README.docker.md](docs/README.docker.md).
 
 ### Manual
 The system requires Temporal for workflow orchestration. A convenience script is provided:
