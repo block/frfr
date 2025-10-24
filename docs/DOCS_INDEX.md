@@ -7,7 +7,7 @@ Quick reference to find the right documentation for your needs.
 | Document | Purpose | Audience |
 |----------|---------|----------|
 | **[QUICKSTART.md](QUICKSTART.md)** | Get up and running in 5 minutes | Everyone |
-| **[README.md](README.md)** | Full project overview and usage | Users & Developers |
+| **[README.md](../README.md)** | Full project overview and usage | Users & Developers |
 | **[README.docker.md](README.docker.md)** | Docker setup and troubleshooting | Docker users |
 | **[AUTHENTICATION.md](AUTHENTICATION.md)** | API key setup and auth configuration | Everyone |
 
@@ -16,7 +16,7 @@ Quick reference to find the right documentation for your needs.
 | Document | Purpose | Audience |
 |----------|---------|----------|
 | **[DESIGN.md](DESIGN.md)** | System architecture and design decisions | Developers & Contributors |
-| **[STATUS.md](STATUS.md)** | Current V5 production status and features | Everyone |
+| **[STATUS.md](../STATUS.md)** | Current V5 production status and features | Everyone |
 
 ## Features & Implementation
 
@@ -26,7 +26,7 @@ Quick reference to find the right documentation for your needs.
 | **[IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)** | V4 implementation summary | Developers |
 | **[MAXIMUM_DEPTH_MODE.md](MAXIMUM_DEPTH_MODE.md)** | Maximum depth extraction philosophy | Developers |
 | **[PARALLEL_AND_RECOVERY.md](PARALLEL_AND_RECOVERY.md)** | Parallel processing and recovery | Developers |
-| **[RESUME_FEATURE.md](RESUME_FEATURE.md)** | Resume interrupted extractions | Users |
+| Resume capability: see [PARALLEL_AND_RECOVERY.md](PARALLEL_AND_RECOVERY.md) | Resume interrupted extractions | Users |
 | **[STRUCTURAL_EXTRACTION.md](STRUCTURAL_EXTRACTION.md)** | Structure-aware extraction | Developers |
 | **[TEST_SUITE_SUMMARY.md](TEST_SUITE_SUMMARY.md)** | Component test suite | Developers |
 
@@ -43,13 +43,13 @@ Quick reference to find the right documentation for your needs.
 ### "I want to..."
 
 - **...get started quickly** → [QUICKSTART.md](QUICKSTART.md)
-- **...understand the architecture** → [DESIGN.md](DESIGN.md) or [README.md](README.md)
+- **...understand the architecture** → [DESIGN.md](DESIGN.md) or [README.md](../README.md)
 - **...set up Docker** → [README.docker.md](README.docker.md)
 - **...set up authentication** → [AUTHENTICATION.md](AUTHENTICATION.md)
-- **...see current production status** → [STATUS.md](STATUS.md)
+- **...see current production status** → [STATUS.md](../STATUS.md)
 - **...understand V5 features** → [V5_FINAL_RESULTS.md](V5_FINAL_RESULTS.md)
 - **...learn about extraction features** → [ENHANCED_EXTRACTION.md](ENHANCED_EXTRACTION.md)
-- **...resume an interrupted extraction** → [RESUME_FEATURE.md](RESUME_FEATURE.md)
+- **...resume an interrupted extraction** → [PARALLEL_AND_RECOVERY.md](PARALLEL_AND_RECOVERY.md)
 - **...troubleshoot Docker** → [README.docker.md](README.docker.md#troubleshooting)
 - **...run Makefile commands** → Run `make help`
 
@@ -57,10 +57,10 @@ Quick reference to find the right documentation for your needs.
 
 ```
 frfr/
-├── README.md                          # Main documentation
+├── README.md                          # Main documentation (at repo root)
 ├── QUICKSTART.md                      # 5-minute setup
 ├── DESIGN.md                          # Architecture & philosophy
-├── STATUS.md                          # Current V5 production status
+├── STATUS.md                          # Current V5 production status (at repo root)
 ├── README.docker.md                   # Docker guide
 ├── AUTHENTICATION.md                  # API key setup
 ├── DOCS_INDEX.md                      # This file
@@ -68,7 +68,6 @@ frfr/
 ├── IMPLEMENTATION_SUMMARY.md          # Implementation summary
 ├── MAXIMUM_DEPTH_MODE.md              # Maximum depth philosophy
 ├── PARALLEL_AND_RECOVERY.md           # Parallel processing
-├── RESUME_FEATURE.md                  # Resume functionality
 ├── STRUCTURAL_EXTRACTION.md           # Structure-aware extraction
 ├── TEST_SUITE_SUMMARY.md              # Test suite
 ├── V5_DESIGN.md                       # V5 design
@@ -104,7 +103,7 @@ frfr/
 
 **PARALLEL_AND_RECOVERY.md** - Parallel processing, fact recovery, performance
 
-**RESUME_FEATURE.md** - Resume interrupted extractions, session management
+**PARALLEL_AND_RECOVERY.md** - Resume interrupted extractions, session management
 
 **STRUCTURAL_EXTRACTION.md** - Section-aware extraction, table structure parsing
 
@@ -114,26 +113,26 @@ frfr/
 
 ### End Users
 1. [QUICKSTART.md](QUICKSTART.md) - Get started in 3 commands
-2. [README.md](README.md) - Full usage guide
+2. [README.md](../README.md) - Full usage guide
 3. [AUTHENTICATION.md](AUTHENTICATION.md) - Set up API access
-4. [RESUME_FEATURE.md](RESUME_FEATURE.md) - Resume interrupted work
+4. [PARALLEL_AND_RECOVERY.md](PARALLEL_AND_RECOVERY.md) - Resume interrupted work
 
 ### Developers (New)
 1. [README.md](README.md) - Project overview
 2. [DESIGN.md](DESIGN.md) - Architecture and philosophy
 3. [README.docker.md](README.docker.md) - Development setup
-4. [STATUS.md](STATUS.md) - Current production status
+4. [STATUS.md](../STATUS.md) - Current production status
 5. [V5_FINAL_RESULTS.md](V5_FINAL_RESULTS.md) - Latest achievements
 
 ### Contributors
-1. [STATUS.md](STATUS.md) - Current V5 production status
+1. [STATUS.md](../STATUS.md) - Current V5 production status
 2. [ENHANCED_EXTRACTION.md](ENHANCED_EXTRACTION.md) - Extraction features
 3. [V5_DESIGN.md](V5_DESIGN.md) - V5 architecture
 4. [DESIGN.md](DESIGN.md) - Core philosophy
 
 ### Production Users
 1. [V5_FINAL_RESULTS.md](V5_FINAL_RESULTS.md) - V5 performance metrics
-2. [STATUS.md](STATUS.md) - Production features and status
+1. [STATUS.md](../STATUS.md) - Production features and status
 3. [AUTHENTICATION.md](AUTHENTICATION.md) - Deployment auth setup
 
 ## Documentation Standards
@@ -149,7 +148,7 @@ All documentation follows these principles:
 
 - Check `make help` for Docker commands
 - See [README.docker.md](README.docker.md#troubleshooting) for troubleshooting
-- Review [STATUS.md](STATUS.md) for current production status
+- Review [STATUS.md](../STATUS.md) for current production status
 - Check [V5_FINAL_RESULTS.md](V5_FINAL_RESULTS.md) for performance metrics
 - Review module-specific docstrings in source code
 

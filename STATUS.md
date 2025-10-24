@@ -306,12 +306,11 @@ python frfr/cli.py correct-quotes <session_id> <text_file> \
 - `frfr/session.py` - Session management
 
 **Documentation**:
-- `ENHANCED_EXTRACTION.md` - Complete guide to enhanced extraction
-- `MAXIMUM_DEPTH_MODE.md` - Maximum depth extraction philosophy
-- `IMPLEMENTATION_SUMMARY.md` - Summary of all enhancements
-- `STRUCTURAL_EXTRACTION.md` - Structure-aware extraction approach
-- `PARALLEL_AND_RECOVERY.md` - Parallel processing and fact recovery
-- `RESUME_FEATURE.md` - Resume capability documentation
+- `docs/ENHANCED_EXTRACTION.md` - Complete guide to enhanced extraction
+- `docs/MAXIMUM_DEPTH_MODE.md` - Maximum depth extraction philosophy
+- `docs/IMPLEMENTATION_SUMMARY.md` - Summary of all enhancements
+- `docs/STRUCTURAL_EXTRACTION.md` - Structure-aware extraction approach
+- `docs/PARALLEL_AND_RECOVERY.md` - Parallel processing and fact recovery
 
 **Output**:
 - `output/soc2_full_extraction.txt` - Full PDF text (6,775 lines)

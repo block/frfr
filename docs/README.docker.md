@@ -281,4 +281,4 @@ All services communicate on the `frfr-network` bridge network. The app connects 
 4. Run: `frfr start-session --docs /app/documents/your-file.pdf`
 5. Monitor workflows: `make temporal-ui`
 
-For more details, see the main [README.md](README.md).
+For more details, see the main [README.md](../README.md).

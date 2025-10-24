@@ -320,6 +320,5 @@ time python frfr/cli.py extract-facts ... --max-workers 5  # Parallel
 
 ## Related Files
 
-- `STATUS.md` - Project status and progress
-- `RESUME_FEATURE.md` - Resume capability documentation
+- `../STATUS.md` - Project status and progress
 - `DESIGN.md` - System architecture
