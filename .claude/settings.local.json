@@ -1,7 +1,20 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git reset:*)"
+      "Bash(git reset:*)",
+      "Bash(pip show:*)",
+      "Bash(echo:*)",
+      "Bash(./venv/bin/pip list:*)",
+      "Bash(rm:*)",
+      "Bash(python3:*)",
+      "Bash(source:*)",
+      "Bash(pip install:*)",
+      "Bash(pip config:*)",
+      "Bash(frfr:*)",
+      "Bash(python -m py_compile:*)",
+      "Bash(python -m frfr.cli:*)",
+      "Bash(cat:*)",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []

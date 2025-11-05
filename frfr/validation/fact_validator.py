@@ -25,6 +25,8 @@ class ValidationResult:
     was_recovered: bool = False  # True if fact was recovered from medium confidence
     corrected_quote: Optional[str] = None  # Updated quote if recovered
     corrected_location: Optional[str] = None  # Updated location if recovered
+    is_near_match: bool = False  # True if fact is approximately correct (~75-90% match)
+    match_percentage: Optional[float] = None  # Actual match percentage for near matches
 
 
 class FactValidator:
@@ -70,17 +72,24 @@ class FactValidator:
         """
         Normalize text for comparison.
 
-        Removes extra whitespace, newlines, and normalizes quotes.
+        Aggressively removes extra whitespace, newlines, and normalizes quotes.
+        This handles unexpected whitespace within quotes.
         """
-        # Replace multiple whitespace/newlines with single space
-        text = " ".join(text.split())
+        # Replace all types of whitespace (spaces, tabs, newlines, etc.) with single space
+        import re
+        text = re.sub(r'\s+', ' ', text)
 
         # Normalize various quote types
         text = text.replace(""", '"').replace(""", '"')
         text = text.replace("'", "'").replace("'", "'")
 
-        # Remove common OCR artifacts
-        text = text.replace(" –", "–").replace("– ", "–")
+        # Normalize dashes and hyphens
+        text = text.replace("–", "-").replace("—", "-").replace("‐", "-")
+
+        # Remove common OCR artifacts and extra punctuation spacing
+        text = re.sub(r'\s*([,;:.!?])\s*', r'\1 ', text)
+        text = re.sub(r'\s+([)\]}])', r'\1', text)
+        text = re.sub(r'([(\[{])\s+', r'\1', text)
 
         return text.strip()
 
@@ -109,7 +118,7 @@ class FactValidator:
 
     def find_quote_in_text(
         self, quote: str, text: str, context_lines: int = 5
-    ) -> Tuple[bool, str]:
+    ) -> Tuple[bool, str, float]:
         """
         Search for quote in text with fuzzy matching.
 
@@ -119,17 +128,19 @@ class FactValidator:
             context_lines: Number of lines to expand search if not found
 
         Returns:
-            Tuple of (found, actual_location)
+            Tuple of (found, match_description, match_ratio)
+            - found: True if quote is valid (>= 90% match)
+            - match_description: Human-readable description
+            - match_ratio: Percentage match (0.0 to 1.0)
         """
         normalized_quote = self.normalize_text(quote)
         normalized_text = self.normalize_text(text)
 
         # Try exact match first
         if normalized_quote in normalized_text:
-            return True, "exact match"
+            return True, "exact match", 1.0
 
-        # Try partial match (at least 70% of quote present)
-        # V4.1 FIX: Relaxed from 80% to 70% to reduce false rejections
+        # Try partial match with word-by-word sequential matching
         quote_words = normalized_quote.split()
         text_words = normalized_text.split()
 
@@ -144,10 +155,21 @@ class FactValidator:
 
         match_ratio = matched_words / len(quote_words) if quote_words else 0
 
-        if match_ratio >= 0.7:  # Relaxed from 0.8 to 0.7
-            return True, f"partial match ({match_ratio:.0%})"
+        # Classification:
+        # >= 90%: Valid (exact or near-exact)
+        # 75-89%: Near match (approximately correct, flagged for review)
+        # 40-74%: Medium confidence (attempt recovery)
+        # < 40%: Not found (reject)
 
-        return False, f"not found (only {match_ratio:.0%} match)"
+        if match_ratio >= 0.90:
+            return True, f"near-exact match ({match_ratio:.0%})", match_ratio
+        elif match_ratio >= 0.75:
+            # This is a near match - not quite valid but close
+            return False, f"near match ({match_ratio:.0%})", match_ratio
+        elif match_ratio >= 0.40:
+            return False, f"medium confidence ({match_ratio:.0%})", match_ratio
+        else:
+            return False, f"not found (only {match_ratio:.0%} match)", match_ratio
 
     def attempt_fact_recovery(
         self, claim: str, original_quote: str, search_context: str, start_line: int, end_line: int
@@ -218,7 +240,7 @@ If the claim is NOT supported by this context, set found to false.
                 recovered_quote = result["quote"]
 
                 # Verify the recovered quote actually exists in context
-                found, match_type = self.find_quote_in_text(recovered_quote, search_context)
+                found, match_type, match_ratio = self.find_quote_in_text(recovered_quote, search_context)
 
                 if found:
                     logger.info(f"Successfully recovered fact with {result['confidence']:.0%} confidence")
@@ -277,15 +299,24 @@ If the claim is NOT supported by this context, set found to false.
             # Search for each quote in chunk text directly
             failed_quotes = []
             all_valid = True
+            match_ratios = []
+            best_match_ratio = 0
+            has_near_match = False
 
             for quote in quotes_to_validate:
-                found, match_type = self.find_quote_in_text(quote, chunk_text)
+                found, match_type, match_ratio = self.find_quote_in_text(quote, chunk_text)
+                match_ratios.append(match_ratio)
+                best_match_ratio = max(best_match_ratio, match_ratio)
+
                 if not found:
                     all_valid = False
                     failed_quotes.append((quote[:40], match_type))
+                    # Check if this is a near match (75-89%)
+                    if 0.75 <= match_ratio < 0.90:
+                        has_near_match = True
 
             if all_valid:
-                # All quotes validated successfully
+                # All quotes validated successfully (>= 90% match)
                 quote_snippet = quotes_to_validate[0][:60] + "..." if len(quotes_to_validate[0]) > 60 else quotes_to_validate[0]
                 if len(quotes_to_validate) > 1:
                     quote_snippet += f" (+{len(quotes_to_validate)-1} more)"
@@ -296,10 +327,11 @@ If the claim is NOT supported by this context, set found to false.
                     is_valid=True,
                     actual_line_range=location,
                     quote_snippet=quote_snippet,
+                    match_percentage=best_match_ratio,
                 )
-            else:
-                # Some quotes not found in chunk - fail validation
-                error_msg = f"{len(failed_quotes)}/{len(quotes_to_validate)} quotes not found in chunk"
+            elif has_near_match:
+                # Near match detected (75-89%) - flag for review
+                error_msg = f"Near match detected ({best_match_ratio:.0%}) - approximately correct but not exact"
                 return ValidationResult(
                     fact_index=fact_index,
                     claim=claim[:80],
@@ -307,6 +339,20 @@ If the claim is NOT supported by this context, set found to false.
                     error_message=error_msg,
                     actual_line_range=location,
                     quote_snippet=quotes_to_validate[0][:60] + "..." if len(quotes_to_validate[0]) > 60 else quotes_to_validate[0],
+                    is_near_match=True,
+                    match_percentage=best_match_ratio,
+                )
+            else:
+                # Some quotes not found in chunk - fail validation
+                error_msg = f"{len(failed_quotes)}/{len(quotes_to_validate)} quotes not found in chunk (best: {best_match_ratio:.0%})"
+                return ValidationResult(
+                    fact_index=fact_index,
+                    claim=claim[:80],
+                    is_valid=False,
+                    error_message=error_msg,
+                    actual_line_range=location,
+                    quote_snippet=quotes_to_validate[0][:60] + "..." if len(quotes_to_validate[0]) > 60 else quotes_to_validate[0],
+                    match_percentage=best_match_ratio,
                 )
 
         # Original validation logic (against full document)
@@ -328,13 +374,22 @@ If the claim is NOT supported by this context, set found to false.
         all_found = True
         failed_quotes = []
         match_types = []
+        match_ratios = []
+        best_match_ratio = 0
+        has_near_match = False
 
         for quote in quotes_to_validate:
-            found, match_type = self.find_quote_in_text(quote, line_text)
+            found, match_type, match_ratio = self.find_quote_in_text(quote, line_text)
             match_types.append(match_type)
+            match_ratios.append(match_ratio)
+            best_match_ratio = max(best_match_ratio, match_ratio)
+
             if not found:
                 all_found = False
                 failed_quotes.append(quote)
+                # Check if this is a near match (75-89%)
+                if 0.75 <= match_ratio < 0.90:
+                    has_near_match = True
 
         # If all quotes found, success
         if all_found:
@@ -348,6 +403,7 @@ If the claim is NOT supported by this context, set found to false.
                 is_valid=True,
                 actual_line_range=f"Lines {start_line}-{end_line}",
                 quote_snippet=quote_snippet,
+                match_percentage=best_match_ratio,
             )
 
         # If not found, try expanding the search range for failed quotes
@@ -357,12 +413,21 @@ If the claim is NOT supported by this context, set found to false.
 
         all_found_expanded = True
         expanded_match_types = []
+        expanded_match_ratios = []
+        best_expanded_ratio = 0
+        has_near_match_expanded = False
 
         for quote in quotes_to_validate:
-            found_expanded, match_type_expanded = self.find_quote_in_text(quote, expanded_text)
+            found_expanded, match_type_expanded, match_ratio_expanded = self.find_quote_in_text(quote, expanded_text)
             expanded_match_types.append(match_type_expanded)
+            expanded_match_ratios.append(match_ratio_expanded)
+            best_expanded_ratio = max(best_expanded_ratio, match_ratio_expanded)
+
             if not found_expanded:
                 all_found_expanded = False
+                # Check if this is a near match (75-89%)
+                if 0.75 <= match_ratio_expanded < 0.90:
+                    has_near_match_expanded = True
 
         if all_found_expanded:
             quote_snippet = quotes_to_validate[0][:60] + "..." if len(quotes_to_validate[0]) > 60 else quotes_to_validate[0]
@@ -375,32 +440,37 @@ If the claim is NOT supported by this context, set found to false.
                 is_valid=True,
                 actual_line_range=f"Lines {expanded_start}-{expanded_end} (expanded search)",
                 quote_snippet=quote_snippet,
+                match_percentage=best_expanded_ratio,
+            )
+
+        # Check if we have a near match in expanded search
+        if has_near_match_expanded:
+            quote_snippet = quotes_to_validate[0][:60] + "..." if len(quotes_to_validate[0]) > 60 else quotes_to_validate[0]
+            if len(quotes_to_validate) > 1:
+                quote_snippet += f" (+{len(quotes_to_validate)-1} more)"
+
+            return ValidationResult(
+                fact_index=fact_index,
+                claim=claim[:80],
+                is_valid=False,
+                error_message=f"Near match detected ({best_expanded_ratio:.0%}) - approximately correct but not exact",
+                actual_line_range=f"Lines {expanded_start}-{expanded_end}",
+                quote_snippet=quote_snippet,
+                is_near_match=True,
+                match_percentage=best_expanded_ratio,
             )
 
         # Not found even with expanded search - attempt recovery if quote was close
-        # V4.1 FIX: Define "medium confidence" as 40-69% match (adjusted from 40-79%)
-        # since we now accept 70%+ as valid
-        # V5: For multiple quotes, check if ANY quote had medium confidence
-        # Parse match ratio from strings like "not found (only 17% match)" or "partial match (80%)"
-        best_match_ratio = 0
-        best_quote_for_recovery = quotes_to_validate[0]
+        # Medium confidence: 40-74% match
+        # Near match: 75-89% match (already handled above)
+        # Valid: >= 90% match
 
-        for i, match_type_expanded in enumerate(expanded_match_types):
-            if "%" in match_type_expanded:
-                try:
-                    # Extract percentage number from string
-                    import re
-                    match = re.search(r'(\d+)%', match_type_expanded)
-                    if match:
-                        match_ratio = float(match.group(1)) / 100
-                        if match_ratio > best_match_ratio:
-                            best_match_ratio = match_ratio
-                            best_quote_for_recovery = quotes_to_validate[i]
-                except (ValueError, AttributeError):
-                    pass
+        # Find the quote with the best match ratio for recovery
+        best_quote_idx = expanded_match_ratios.index(max(expanded_match_ratios)) if expanded_match_ratios else 0
+        best_quote_for_recovery = quotes_to_validate[best_quote_idx]
 
-        if 0.4 <= best_match_ratio < 0.7:  # Adjusted from 0.8 to 0.7
-            logger.info(f"Medium confidence fact ({best_match_ratio:.0%}), attempting recovery...")
+        if 0.4 <= best_expanded_ratio < 0.75:  # Medium confidence range
+            logger.info(f"Medium confidence fact ({best_expanded_ratio:.0%}), attempting recovery...")
 
             # Try recovery with even wider context
             recovery_start = max(1, start_line - 20)
@@ -429,7 +499,7 @@ If the claim is NOT supported by this context, set found to false.
         # V5: Report how many quotes failed
         error_msg = f"{len(failed_quotes)}/{len(quotes_to_validate)} quotes not found in specified lines or nearby"
         if expanded_match_types:
-            error_msg += f" (best match: {expanded_match_types[0]})"
+            error_msg += f" (best match: {best_expanded_ratio:.0%})"
 
         return ValidationResult(
             fact_index=fact_index,
@@ -438,6 +508,7 @@ If the claim is NOT supported by this context, set found to false.
             error_message=error_msg,
             actual_line_range=f"Lines {start_line}-{end_line}",
             quote_snippet=quotes_to_validate[0][:60] + "..." if len(quotes_to_validate[0]) > 60 else quotes_to_validate[0],
+            match_percentage=best_expanded_ratio,
         )
 
     def validate_facts(self, facts: List[Dict]) -> List[ValidationResult]:
@@ -492,13 +563,16 @@ If the claim is NOT supported by this context, set found to false.
 
         # Calculate stats
         valid_count = sum(1 for r in results if r.is_valid)
-        invalid_count = len(results) - valid_count
+        near_match_count = sum(1 for r in results if not r.is_valid and r.is_near_match)
+        invalid_count = len(results) - valid_count - near_match_count
 
         stats = {
             "total_facts": len(results),
             "valid_facts": valid_count,
+            "near_match_facts": near_match_count,
             "invalid_facts": invalid_count,
             "validation_rate": valid_count / len(results) if results else 0,
+            "near_match_rate": near_match_count / len(results) if results else 0,
         }
 
         return results, stats
@@ -532,13 +606,16 @@ def validate_consolidated_facts(
 
     # Calculate stats
     valid_count = sum(1 for r in results if r.is_valid)
-    invalid_count = len(results) - valid_count
+    near_match_count = sum(1 for r in results if not r.is_valid and r.is_near_match)
+    invalid_count = len(results) - valid_count - near_match_count
 
     stats = {
         "total_facts": len(results),
         "valid_facts": valid_count,
+        "near_match_facts": near_match_count,
         "invalid_facts": invalid_count,
         "validation_rate": valid_count / len(results) if results else 0,
+        "near_match_rate": near_match_count / len(results) if results else 0,
     }
 
     return results, stats

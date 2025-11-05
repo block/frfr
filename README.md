@@ -4,7 +4,7 @@ High-confidence document Q&A system using LLM swarm consensus with hallucination
 
 > **Quick Links**: [🚀 Quick Start](docs/QUICKSTART.md) | [Docker Guide](docs/README.docker.md) | [Design Doc](docs/DESIGN.md) | [All Docs](docs/DOCS_INDEX.md)
 
-**Ready to extract your PDF?** See [QUICKSTART.md](docs/QUICKSTART.md) for a 3-command guide.
+**Ready to process your PDF?** Use `frfr process` for one-command extraction and querying, or see [QUICKSTART.md](docs/QUICKSTART.md) for details.
 
 ## Overview
 
@@ -355,7 +355,33 @@ Returns:
 
 ## Usage
 
-### Current Workflow (V5 Production)
+### Quick Start: Process Command (One-Shot)
+
+The `process` supercommand runs the complete pipeline from PDF to interactive querying in one command:
+
+```bash
+# Process a PDF from start to finish
+frfr process documents/soc2_report.pdf
+
+# With custom settings
+frfr process documents/report.pdf \
+  --max-workers 11 \
+  --multipass \
+  --show-facts
+
+# Process without entering interactive mode
+frfr process documents/report.pdf --no-interactive
+```
+
+This command:
+1. ✅ Extracts PDF to text
+2. ✅ Extracts facts using LLM
+3. ✅ Validates facts against source
+4. ✅ Launches interactive query mode
+
+### Step-by-Step Workflow (Advanced)
+
+For more control over individual steps:
 
 ```bash
 # 1. Extract PDF to text
@@ -364,8 +390,6 @@ frfr extract documents/soc2_report.pdf output/soc2_text.txt
 # 2. Extract facts with V5 features
 frfr extract-facts output/soc2_text.txt \
   --document-name my_soc2 \
-  --chunk-size 500 \
-  --overlap 100 \
   --max-workers 11
 
 # Output:
@@ -412,13 +436,33 @@ Confidence: High (multiple sources)
 
 ### CLI Options
 
+#### Process Command (Supercommand)
+
+```bash
+# Basic usage
+frfr process documents/report.pdf
+
+# With custom settings
+frfr process documents/report.pdf \
+  --document-name my_doc \
+  --max-workers 11            # Parallel Claude processes (default: 5)
+  --chunk-size 500            # Lines per chunk (default: 500)
+  --overlap 100               # Overlap between chunks (default: 100)
+  --multipass                 # Enable multi-pass extraction
+  --skip-validation           # Skip validation step
+  --no-interactive            # Don't enter interactive mode
+  --show-facts                # Show cited facts in interactive mode
+```
+
+#### Individual Commands (Advanced)
+
 ```bash
 # Extract facts with parallel processing
 frfr extract-facts text.txt \
   --document-name doc_name \
   --max-workers 11            # Parallel Claude processes (default: 5)
-  --chunk-size 500            # Lines per chunk (default: 1000)
-  --overlap 100               # Overlap between chunks (default: 200)
+  --chunk-size 500            # Lines per chunk (default: 500)
+  --overlap 100               # Overlap between chunks (default: 100)
 
 # Enable multi-pass extraction (CUECs, tests, quantitative, technical)
 frfr extract-facts text.txt \
@@ -435,6 +479,9 @@ frfr extract-facts text.txt \
 frfr validate-facts facts.json text.txt \
   --show-invalid-only \
   --output validation_report.json
+
+# Interactive querying
+frfr interactive facts.json --show-facts
 ```
 
 ## Fact Schema

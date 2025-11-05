@@ -38,8 +38,8 @@ class FactExtractor:
     def __init__(
         self,
         claude_command: str = "claude",
-        chunk_size: int = 1000,
-        overlap_size: int = 200,
+        chunk_size: int = 500,
+        overlap_size: int = 100,
         max_workers: int = 5,
     ):
         """
@@ -47,8 +47,8 @@ class FactExtractor:
 
         Args:
             claude_command: Path to claude CLI command
-            chunk_size: Number of lines per chunk
-            overlap_size: Number of lines to overlap between chunks
+            chunk_size: Number of lines per chunk (default: 500)
+            overlap_size: Number of lines to overlap between chunks (default: 100)
             max_workers: Maximum number of parallel Claude processes
         """
         self.client = ClaudeClient(claude_command=claude_command)

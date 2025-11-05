@@ -1,11 +1,44 @@
-# Quick Start: Extract Your SOC2 Report
+# Quick Start: Process and Query Your Documents
 
-Extract text from PDFs using a single command. Works from your terminal on the host machine.
+Process PDFs and query them interactively using a single command. Works from your terminal on the host machine.
 
 ## Prerequisites
 
 - Docker services running: `make up` (or `docker compose up -d`)
 - Your PDF in the `documents/` directory
+- Claude CLI authenticated: `claude login`
+
+## Fastest Way: Process Command (PDF → Interactive Querying)
+
+Process a PDF from start to finish and enter interactive query mode:
+
+```bash
+cd ~/Development/frfr
+
+# Process a document (extracts, analyzes, validates, and queries)
+docker compose exec frfr frfr process /app/documents/soc2_report.pdf
+
+# Or with custom settings
+docker compose exec frfr frfr process /app/documents/report.pdf \
+  --max-workers 11 \
+  --multipass \
+  --show-facts
+```
+
+This single command:
+1. ✅ Extracts PDF to text
+2. ✅ Extracts facts using LLM
+3. ✅ Validates facts against source
+4. ✅ Launches interactive query mode
+
+Then ask questions like:
+- "Does the system implement 2-factor authentication?"
+- "What are the data retention policies?"
+- "What security controls are described?"
+
+Type `exit` to quit interactive mode.
+
+## Alternative: Step-by-Step Extraction
 
 ## Extract a PDF (Portable CLI)
 

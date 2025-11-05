@@ -154,4 +154,4 @@ All documentation follows these principles:
 
 ---
 
-**Last updated**: 2025-10-17 - V5 production-ready with 35% QV coverage, 17 active docs
+**Last updated**: 2025-11-04 - V5 production-ready with 35% QV coverage, 17 active docs

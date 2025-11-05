@@ -150,8 +150,8 @@ def info(pdf_path: str):
 @click.argument("text_file", type=click.Path(exists=True))
 @click.option("--document-name", help="Name of the document (defaults to filename)")
 @click.option("--session-id", help="Session ID (creates new if not provided)")
-@click.option("--chunk-size", default=1000, help="Lines per chunk")
-@click.option("--overlap", default=200, help="Overlap lines between chunks")
+@click.option("--chunk-size", default=500, help="Lines per chunk (default: 500)")
+@click.option("--overlap", default=100, help="Overlap lines between chunks (default: 100)")
 @click.option("--start-chunk", default=0, help="Start extraction from this chunk (for resume)")
 @click.option("--end-chunk", default=None, type=int, help="End extraction at this chunk (inclusive)")
 @click.option("--max-workers", default=5, help="Maximum parallel Claude processes (default: 5)")
@@ -174,7 +174,7 @@ def extract_facts_cmd(
 
     This command:
     1. Generates a structured summary of the document
-    2. Chunks the document with sliding window (default: 1000 lines, 200 overlap)
+    2. Chunks the document with sliding window (default: 500 lines, 100 overlap)
     3. Extracts facts from each chunk using the summary as context
     4. Saves all artifacts in a session directory
 
@@ -205,7 +205,6 @@ def extract_facts_cmd(
         else:
             chunk_range += "+"
         console.print(f"  [yellow]Chunk range: {chunk_range}[/yellow]")
-    console.print()
 
     extractor = FactExtractor(
         chunk_size=chunk_size,
@@ -213,8 +212,28 @@ def extract_facts_cmd(
         max_workers=max_workers,
     )
 
+    # Calculate total chunks to provide better progress info
+    with open(text_file, "r") as f:
+        text = f.read()
+    chunks = extractor.chunk_text(text)
+    total_chunks = len(chunks)
+    total_lines = len(text.split('\n'))
+
+    # Calculate chunks to be processed
+    if end_chunk is not None:
+        chunks_to_process = end_chunk - start_chunk + 1
+    else:
+        chunks_to_process = total_chunks - start_chunk
+
+    console.print(f"  Document: {total_lines:,} lines → {total_chunks} chunks")
+    console.print(f"  Processing: {chunks_to_process} chunks (chunk {start_chunk} to {end_chunk if end_chunk else total_chunks-1})")
+    console.print()
+
     # Run extraction with progress bar
     try:
+        # Track running totals
+        running_facts = 0
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -223,12 +242,20 @@ def extract_facts_cmd(
             TimeRemainingColumn(),
             console=console,
         ) as progress:
-            task = progress.add_task("[cyan]Processing chunks...", total=None)
+            task = progress.add_task("[cyan]Processing chunks...", total=chunks_to_process)
 
             def update_progress(current, total, message):
-                if progress.tasks[task].total is None:
-                    progress.update(task, total=total)
-                progress.update(task, completed=current, description=f"[cyan]{message}")
+                nonlocal running_facts
+                # Extract fact count from message
+                import re
+                match = re.search(r'(\d+) facts validated', message)
+                if match:
+                    chunk_facts = int(match.group(1))
+                    running_facts += chunk_facts
+                    desc = f"[cyan]Chunk {start_chunk + current}/{start_chunk + total} • {running_facts} facts extracted"
+                else:
+                    desc = f"[cyan]{message}"
+                progress.update(task, completed=current, description=desc)
 
             result = extractor.extract_from_document(
                 text_file=text_file,
@@ -251,6 +278,8 @@ def extract_facts_cmd(
         table.add_row("Document", document_name)
         table.add_row("Model", result.model_used)
         table.add_row("Total Facts", str(len(result.facts)))
+        table.add_row("Chunks Processed", f"{chunks_to_process}/{total_chunks}")
+        table.add_row("Facts per Chunk", f"{len(result.facts)/chunks_to_process:.1f} avg")
         table.add_row("Session ID", session.session_id)
 
         console.print(table)
@@ -448,6 +477,12 @@ def validate_facts_cmd(
         summary_table.add_row("Total Facts", str(stats["total_facts"]))
         summary_table.add_row("Valid Facts", str(stats["valid_facts"]))
         summary_table.add_row(
+            "Near Match Facts",
+            f"[yellow]{stats.get('near_match_facts', 0)}[/yellow]"
+            if stats.get("near_match_facts", 0) > 0
+            else "0",
+        )
+        summary_table.add_row(
             "Invalid Facts",
             f"[red]{stats['invalid_facts']}[/red]"
             if stats["invalid_facts"] > 0
@@ -456,31 +491,41 @@ def validate_facts_cmd(
         summary_table.add_row(
             "Validation Rate", f"{stats['validation_rate']:.1%}"
         )
+        summary_table.add_row(
+            "Near Match Rate", f"{stats.get('near_match_rate', 0):.1%}"
+        )
 
         console.print(summary_table)
         console.print()
 
         # Show detailed results
-        if stats["invalid_facts"] > 0 or not show_invalid_only:
+        if stats["invalid_facts"] > 0 or stats.get("near_match_facts", 0) > 0 or not show_invalid_only:
             results_table = Table(title="Validation Details")
             results_table.add_column("#", style="dim", width=4)
-            results_table.add_column("Status", width=8)
+            results_table.add_column("Status", width=12)
             results_table.add_column("Claim", style="cyan")
-            results_table.add_column("Issue", style="yellow")
+            results_table.add_column("Issue / Match %", style="yellow")
 
             for result in results:
                 # Skip valid facts if showing invalid only
                 if show_invalid_only and result.is_valid:
                     continue
 
-                status = "[green]✓ VALID[/green]" if result.is_valid else "[red]✗ INVALID[/red]"
-                issue = result.error_message if not result.is_valid else ""
+                if result.is_valid:
+                    status = "[green]✓ VALID[/green]"
+                    match_info = f"{result.match_percentage:.0%}" if result.match_percentage else "100%"
+                elif result.is_near_match:
+                    status = "[yellow]~ NEAR[/yellow]"
+                    match_info = f"{result.match_percentage:.0%} - {result.error_message[:30]}..." if len(result.error_message) > 30 else result.error_message
+                else:
+                    status = "[red]✗ INVALID[/red]"
+                    match_info = result.error_message[:40] + "..." if len(result.error_message) > 40 else result.error_message
 
                 results_table.add_row(
                     str(result.fact_index + 1),
                     status,
                     result.claim[:60] + "..." if len(result.claim) > 60 else result.claim,
-                    issue[:40] + "..." if len(issue) > 40 else issue,
+                    match_info,
                 )
 
             console.print(results_table)
@@ -496,6 +541,8 @@ def validate_facts_cmd(
                         "index": r.fact_index,
                         "claim": r.claim,
                         "is_valid": r.is_valid,
+                        "is_near_match": r.is_near_match,
+                        "match_percentage": r.match_percentage,
                         "error_message": r.error_message,
                         "line_range": r.actual_line_range,
                         "quote_snippet": r.quote_snippet,
@@ -510,12 +557,16 @@ def validate_facts_cmd(
 
             console.print(f"[green]✓[/green] Validation report saved: [cyan]{output_path}[/cyan]\n")
 
-        # Exit with error if any facts invalid
+        # Exit with error if any facts invalid (but not for near matches)
         if stats["invalid_facts"] > 0:
             console.print(
                 f"[yellow]⚠ Warning: {stats['invalid_facts']} fact(s) failed validation[/yellow]\n"
             )
             sys.exit(1)
+        elif stats.get("near_match_facts", 0) > 0:
+            console.print(
+                f"[yellow]⚠ Note: {stats['near_match_facts']} fact(s) are near matches (~75-89% match)[/yellow]\n"
+            )
 
     except Exception as e:
         console.print(f"\n[red]✗ Validation failed: {e}[/red]\n")
@@ -838,18 +889,27 @@ AVAILABLE FACTS:
 {deep_instruction}
 INSTRUCTIONS:
 1. Search through the facts to find information relevant to the question
-2. Provide a clear, direct answer with INLINE CITATIONS
-3. Cite facts inline using [Fact N] notation immediately after each claim
-4. If the facts don't contain enough information to answer, say so clearly
-5. Be precise - only claim what the facts actually support{"" if not deep else " (including details from surrounding context)"}
+2. Provide a clear, direct answer with INLINE CITATIONS including source locations
+3. Cite facts inline using [Fact N, Location] notation immediately after each claim
+4. ALWAYS include the source location from the fact (e.g., "Lines 123-125") so the user can cross-check
+5. If the facts don't contain enough information to answer, say so clearly
+6. Be precise - only claim what the facts actually support{"" if not deep else " (including details from surrounding context)"}
 
 Format your response as:
-ANSWER: [your answer with inline citations like "SSO is enabled [Fact 42] using SAML 2.0 [Fact 108]"]
+ANSWER: [your answer with inline citations including locations]
 CONFIDENCE: [High/Medium/Low]
 
+SOURCE REFERENCES:
+[List each cited fact with its full location for easy cross-checking]
+
 Example format:
-ANSWER: Yes, the vendor supports SSO [Fact 42]. The implementation uses SAML 2.0 protocol [Fact 108] and integrates with Azure AD [Fact 234].
+ANSWER: Yes, the vendor supports SSO [Fact 42, Lines 1245-1248]. The implementation uses SAML 2.0 protocol [Fact 108, Lines 2103-2105] and integrates with Azure AD [Fact 234, Lines 3567-3569].
 CONFIDENCE: High
+
+SOURCE REFERENCES:
+- Fact 42 (Lines 1245-1248): SSO configuration details
+- Fact 108 (Lines 2103-2105): SAML 2.0 protocol implementation
+- Fact 234 (Lines 3567-3569): Azure AD integration
 """
 
             response = claude.prompt(prompt)
@@ -864,7 +924,8 @@ CONFIDENCE: High
 
         # Extract and display cited facts
         import re
-        fact_citations = re.findall(r'\[Fact (\d+)\]', response)
+        # Match both formats: [Fact N] and [Fact N, Lines X-Y]
+        fact_citations = re.findall(r'\[Fact (\d+)(?:,\s*Lines [^\]]+)?\]', response)
         if fact_citations:
             # Get unique fact numbers in order of appearance
             seen = set()
@@ -899,6 +960,74 @@ CONFIDENCE: High
                     except (ValueError, IndexError):
                         pass
 
+        # DEEP SEARCH: Interactive fact exploration
+        if deep and source_lines and fact_citations:
+            console.print("[dim]─" * 60 + "[/dim]\n")
+            console.print("[bold yellow]🔎 Deep Search Mode Enabled[/bold yellow]")
+            console.print("[dim]Type a fact number to see surrounding context from the source document[/dim]")
+            console.print("[dim]Type 'done' or press Enter to continue[/dim]\n")
+
+            while True:
+                try:
+                    user_input = console.input("[bold cyan]Dig deeper into fact #:[/bold cyan] ").strip()
+
+                    if not user_input or user_input.lower() in ['done', 'exit', 'q', 'quit']:
+                        console.print()
+                        break
+
+                    # Parse fact number
+                    try:
+                        fact_num = int(user_input)
+                        fact_idx = fact_num - 1
+
+                        if fact_idx < 0 or fact_idx >= len(all_facts):
+                            console.print(f"[yellow]⚠ Fact {fact_num} not found (valid range: 1-{len(all_facts)})[/yellow]\n")
+                            continue
+
+                        fact = all_facts[fact_idx]
+                        location = fact.get('source_location', '')
+
+                        # Get surrounding context
+                        context = _get_surrounding_context(location, source_lines, context_lines=20)
+
+                        if not context:
+                            console.print(f"[yellow]⚠ Could not extract context for fact {fact_num}[/yellow]\n")
+                            continue
+
+                        # Display deep dive
+                        console.print(f"\n[bold cyan]════ Fact {fact_num} Deep Dive ════[/bold cyan]\n")
+                        console.print(f"[bold]Claim:[/bold] {fact.get('claim', '')}")
+                        console.print(f"[dim]Location: {location}[/dim]\n")
+
+                        # Show evidence quote
+                        evidence = ""
+                        if "evidence_quotes" in fact and fact["evidence_quotes"]:
+                            if isinstance(fact["evidence_quotes"], list) and len(fact["evidence_quotes"]) > 0:
+                                evidence = fact["evidence_quotes"][0].get("quote", "")
+                        elif "evidence_quote" in fact:
+                            evidence = fact.get("evidence_quote", "")
+
+                        if evidence:
+                            console.print(f"[bold]Evidence Quote:[/bold]")
+                            console.print(f"[italic]\"{evidence}\"[/italic]\n")
+
+                        # Show surrounding context
+                        console.print(f"[bold yellow]📖 Source Document Context (±20 lines):[/bold yellow]")
+                        console.print(f"[dim]{'─' * 70}[/dim]")
+                        console.print(f"[dim]{context}[/dim]")
+                        console.print(f"[dim]{'─' * 70}[/dim]\n")
+
+                    except ValueError:
+                        console.print(f"[yellow]⚠ Please enter a fact number (e.g., '42') or 'done'[/yellow]\n")
+                        continue
+
+                except KeyboardInterrupt:
+                    console.print("\n")
+                    break
+                except EOFError:
+                    console.print("\n")
+                    break
+
         # Interactive mode
         if interactive:
             console.print("[dim]─" * 60 + "[/dim]\n")
@@ -926,18 +1055,27 @@ AVAILABLE FACTS:
 
 INSTRUCTIONS:
 1. Search through the facts to find information relevant to the question
-2. Provide a clear, direct answer with INLINE CITATIONS
-3. Cite facts inline using [Fact N] notation immediately after each claim
-4. If the facts don't contain enough information to answer, say so clearly
-5. Be precise - only claim what the facts actually support
+2. Provide a clear, direct answer with INLINE CITATIONS including source locations
+3. Cite facts inline using [Fact N, Location] notation immediately after each claim
+4. ALWAYS include the source location from the fact (e.g., "Lines 123-125") so the user can cross-check
+5. If the facts don't contain enough information to answer, say so clearly
+6. Be precise - only claim what the facts actually support
 
 Format your response as:
-ANSWER: [your answer with inline citations like "SSO is enabled [Fact 42] using SAML 2.0 [Fact 108]"]
+ANSWER: [your answer with inline citations including locations]
 CONFIDENCE: [High/Medium/Low]
 
+SOURCE REFERENCES:
+[List each cited fact with its full location for easy cross-checking]
+
 Example format:
-ANSWER: Yes, the vendor supports SSO [Fact 42]. The implementation uses SAML 2.0 protocol [Fact 108] and integrates with Azure AD [Fact 234].
+ANSWER: Yes, the vendor supports SSO [Fact 42, Lines 1245-1248]. The implementation uses SAML 2.0 protocol [Fact 108, Lines 2103-2105] and integrates with Azure AD [Fact 234, Lines 3567-3569].
 CONFIDENCE: High
+
+SOURCE REFERENCES:
+- Fact 42 (Lines 1245-1248): SSO configuration details
+- Fact 108 (Lines 2103-2105): SAML 2.0 protocol implementation
+- Fact 234 (Lines 3567-3569): Azure AD integration
 """
                         response = claude.prompt(prompt)
 
@@ -1141,18 +1279,27 @@ AVAILABLE FACTS:
 
 INSTRUCTIONS:
 1. Search through the facts to find information relevant to the question
-2. Provide a clear, direct answer with INLINE CITATIONS
-3. Cite facts inline using [Fact N] notation immediately after each claim
-4. If the facts don't contain enough information to answer, say so clearly
-5. Be precise - only claim what the facts actually support
+2. Provide a clear, direct answer with INLINE CITATIONS including source locations
+3. Cite facts inline using [Fact N, Location] notation immediately after each claim
+4. ALWAYS include the source location from the fact (e.g., "Lines 123-125") so the user can cross-check
+5. If the facts don't contain enough information to answer, say so clearly
+6. Be precise - only claim what the facts actually support
 
 Format your response as:
-ANSWER: [your answer with inline citations like "SSO is enabled [Fact 42] using SAML 2.0 [Fact 108]"]
+ANSWER: [your answer with inline citations including locations]
 CONFIDENCE: [High/Medium/Low]
 
+SOURCE REFERENCES:
+[List each cited fact with its full location for easy cross-checking]
+
 Example format:
-ANSWER: Yes, the vendor supports SSO [Fact 42]. The implementation uses SAML 2.0 protocol [Fact 108] and integrates with Azure AD [Fact 234].
+ANSWER: Yes, the vendor supports SSO [Fact 42, Lines 1245-1248]. The implementation uses SAML 2.0 protocol [Fact 108, Lines 2103-2105] and integrates with Azure AD [Fact 234, Lines 3567-3569].
 CONFIDENCE: High
+
+SOURCE REFERENCES:
+- Fact 42 (Lines 1245-1248): SSO configuration details
+- Fact 108 (Lines 2103-2105): SAML 2.0 protocol implementation
+- Fact 234 (Lines 3567-3569): Azure AD integration
 """
                 response = claude.prompt(prompt, max_tokens=4000)
 
@@ -1207,6 +1354,408 @@ CONFIDENCE: High
         except Exception as e:
             console.print(f"\n[red]✗ Error: {e}[/red]\n")
             # Continue the loop rather than exit
+
+
+@main.command("process")
+@click.argument("pdf_path", type=click.Path(exists=True))
+@click.option("--document-name", help="Name of the document (defaults to filename)")
+@click.option("--chunk-size", default=500, help="Lines per chunk for fact extraction (default: 500)")
+@click.option("--overlap", default=100, help="Overlap lines between chunks (default: 100)")
+@click.option("--max-workers", default=5, help="Maximum parallel Claude processes (default: 5)")
+@click.option("--multipass", is_flag=True, help="Enable multi-pass extraction")
+@click.option("--skip-validation", is_flag=True, help="Skip fact validation step")
+@click.option("--no-interactive", is_flag=True, help="Skip interactive mode (just process)")
+@click.option("--show-facts", is_flag=True, help="Show supporting facts in interactive mode")
+def process_cmd(
+    pdf_path: str,
+    document_name: str,
+    chunk_size: int,
+    overlap: int,
+    max_workers: int,
+    multipass: bool,
+    skip_validation: bool,
+    no_interactive: bool,
+    show_facts: bool,
+):
+    """
+    Process a PDF from start to finish: extract text, extract facts, validate, and query.
+
+    PDF_PATH: Path to the input PDF file
+
+    This supercommand combines all steps:
+    1. Extract PDF to text
+    2. Extract facts using LLM
+    3. Validate facts against source
+    4. Launch interactive query mode
+
+    Example:
+        frfr process documents/soc2_report.pdf
+        frfr process documents/report.pdf --max-workers 11 --multipass
+    """
+    console.print("\n[bold blue]🚀 Frfr Complete Processing Pipeline[/bold blue]\n")
+
+    pdf_path = Path(pdf_path)
+    if not document_name:
+        document_name = pdf_path.stem
+
+    # Setup paths
+    output_dir = Path("output")
+    output_dir.mkdir(exist_ok=True)
+
+    text_file = output_dir / f"{document_name}_text.txt"
+    facts_file = output_dir / f"{document_name}_facts.json"
+
+    # ========== STEP 1: Extract PDF to Text ==========
+    console.print("[bold cyan]Step 1/4: Extracting PDF text[/bold cyan]\n")
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            progress.add_task("Analyzing PDF...", total=None)
+            info = get_pdf_info(pdf_path)
+
+        console.print(f"[green]✓[/green] PDF: [cyan]{pdf_path.name}[/cyan] ({info['pages']} pages)")
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            progress.add_task(f"Extracting text from {info['pages']} pages...", total=None)
+            result = extract_pdf_to_text(pdf_path=pdf_path, output_path=text_file)
+
+        console.print(f"[green]✓[/green] Extracted {result['total_chars']:,} characters using {result['method']}")
+        console.print(f"[dim]  → {text_file}[/dim]\n")
+
+    except Exception as e:
+        console.print(f"[red]✗ PDF extraction failed: {e}[/red]\n")
+        sys.exit(1)
+
+    # ========== STEP 2: Extract Facts ==========
+    console.print("[bold cyan]Step 2/4: Extracting facts with LLM[/bold cyan]\n")
+
+    session = Session()
+    console.print(f"[green]✓[/green] Session: [cyan]{session.session_id}[/cyan]")
+    console.print(f"  Chunk size: {chunk_size} lines, Overlap: {overlap} lines")
+    console.print(f"  Workers: {max_workers}, Multipass: {multipass}")
+
+    extractor = FactExtractor(
+        chunk_size=chunk_size,
+        overlap_size=overlap,
+        max_workers=max_workers,
+    )
+
+    # Calculate total chunks to provide better progress info
+    with open(text_file, "r") as f:
+        text = f.read()
+    chunks = extractor.chunk_text(text)
+    total_chunks = len(chunks)
+    total_lines = len(text.split('\n'))
+
+    console.print(f"  Document: {total_lines:,} lines → {total_chunks} chunks\n")
+
+    try:
+        # Track running totals
+        running_facts = 0
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeRemainingColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("[cyan]Processing chunks...", total=total_chunks)
+
+            def update_progress(current, total, message):
+                nonlocal running_facts
+                # Extract fact count from message
+                import re
+                match = re.search(r'(\d+) facts validated', message)
+                if match:
+                    chunk_facts = int(match.group(1))
+                    running_facts += chunk_facts
+                    desc = f"[cyan]Chunk {current}/{total} • {running_facts} facts extracted"
+                else:
+                    desc = f"[cyan]{message}"
+                progress.update(task, completed=current, description=desc)
+
+            extraction_result = extractor.extract_from_document(
+                text_file=text_file,
+                document_name=document_name,
+                session=session,
+                progress_callback=update_progress,
+                enable_multipass=multipass,
+            )
+
+        console.print(f"\n[green]✓[/green] Extracted {len(extraction_result.facts)} facts ({len(extraction_result.facts)/total_chunks:.1f} facts/chunk avg)")
+
+        # Consolidate facts
+        summary = session.load_summary(document_name)
+        facts_list = session.load_all_facts(document_name)
+
+        consolidated = {
+            "session_id": session.session_id,
+            "documents": {
+                document_name: {
+                    "summary": summary,
+                    "facts": facts_list,
+                    "fact_count": len(facts_list),
+                    "source_text_file": str(text_file),
+                }
+            },
+            "total_facts": len(facts_list),
+        }
+
+        import json
+        with open(facts_file, "w") as f:
+            json.dump(consolidated, f, indent=2)
+
+        console.print(f"[dim]  → {facts_file}[/dim]\n")
+
+    except Exception as e:
+        console.print(f"[red]✗ Fact extraction failed: {e}[/red]\n")
+        import traceback
+        console.print(f"[dim]{traceback.format_exc()}[/dim]")
+        sys.exit(1)
+
+    # ========== STEP 3: Validate Facts ==========
+    if not skip_validation:
+        console.print("[bold cyan]Step 3/4: Validating facts[/bold cyan]\n")
+
+        try:
+            with console.status("[bold green]Validating facts..."):
+                results, stats = validate_consolidated_facts(facts_file, text_file)
+
+            console.print(f"[green]✓[/green] Validated {stats['total_facts']} facts")
+            console.print(f"  Valid: {stats['valid_facts']} ({stats['validation_rate']:.1%})")
+
+            if stats.get('near_match_facts', 0) > 0:
+                console.print(f"  [yellow]Near Match: {stats['near_match_facts']} ({stats.get('near_match_rate', 0):.1%})[/yellow]")
+
+            if stats['invalid_facts'] > 0:
+                console.print(f"  [red]Invalid: {stats['invalid_facts']}[/red]")
+
+            console.print()
+
+        except Exception as e:
+            console.print(f"[yellow]⚠ Validation failed: {e}[/yellow]")
+            console.print("[dim]Continuing to interactive mode...[/dim]\n")
+    else:
+        console.print("[bold cyan]Step 3/4: Validation skipped[/bold cyan]\n")
+
+    # ========== STEP 4: Interactive Mode ==========
+    if no_interactive:
+        console.print("[bold cyan]Step 4/4: Interactive mode skipped[/bold cyan]\n")
+        console.print("[green]✅ Processing complete![/green]\n")
+        console.print(f"[bold]Output Files:[/bold]")
+        console.print(f"  Text: [cyan]{text_file}[/cyan]")
+        console.print(f"  Facts: [cyan]{facts_file}[/cyan]")
+        console.print(f"\n[dim]To query interactively, run:[/dim]")
+        console.print(f"[dim]  frfr interactive {facts_file}[/dim]\n")
+        return
+
+    console.print("[bold cyan]Step 4/4: Launching interactive query mode[/bold cyan]\n")
+    console.print("[green]✅ Processing complete! Entering interactive mode...[/green]\n")
+    console.print("[dim]─" * 60 + "[/dim]\n")
+
+    # Load facts for interactive mode
+    import json
+    import re
+    from frfr.extraction.claude_client import ClaudeClient
+
+    try:
+        with open(facts_file, "r") as f:
+            data = json.load(f)
+
+        all_facts = []
+        document_names = []
+        if "documents" in data:
+            for doc_name, doc_data in data["documents"].items():
+                document_names.append(doc_name)
+                all_facts.extend(doc_data.get("facts", []))
+
+        console.print(f"[green]✓[/green] Loaded [cyan]{len(all_facts)}[/cyan] facts")
+        if document_names:
+            console.print(f"[dim]Documents: {', '.join(document_names)}[/dim]")
+        console.print()
+
+    except Exception as e:
+        console.print(f"[red]✗ Error loading facts: {e}[/red]\n")
+        sys.exit(1)
+
+    # Build facts text for queries
+    facts_text = ""
+    for i, fact in enumerate(all_facts, 1):
+        claim = fact.get("claim", "")
+        location = fact.get("source_location", "")
+
+        evidence = ""
+        if "evidence_quotes" in fact and fact["evidence_quotes"]:
+            if isinstance(fact["evidence_quotes"], list) and len(fact["evidence_quotes"]) > 0:
+                evidence = fact["evidence_quotes"][0].get("quote", "")
+        elif "evidence_quote" in fact:
+            evidence = fact.get("evidence_quote", "")
+
+        facts_text += f"{i}. {claim}\n"
+        facts_text += f"   Location: {location}\n"
+        if evidence:
+            evidence_preview = evidence[:150] + "..." if len(evidence) > 150 else evidence
+            facts_text += f"   Evidence: \"{evidence_preview}\"\n"
+        facts_text += "\n"
+
+    # Initialize Claude
+    try:
+        claude = ClaudeClient()
+    except Exception as e:
+        console.print(f"[red]✗ Failed to initialize Claude: {e}[/red]\n")
+        sys.exit(1)
+
+    # Show help
+    console.print("[bold]Interactive Mode Commands:[/bold]")
+    console.print("  [cyan]/stats[/cyan]  - Show database statistics")
+    console.print("  [cyan]/help[/cyan]   - Show this help message")
+    console.print("  [cyan]exit[/cyan]    - Exit interactive mode")
+    console.print()
+    console.print("[yellow]Type your questions below:[/yellow]")
+    console.print("[dim]─" * 60 + "[/dim]\n")
+
+    # Interactive loop
+    while True:
+        try:
+            question = console.input("[bold cyan]Question:[/bold cyan] ")
+
+            if question.lower() in ['exit', 'quit', 'q']:
+                console.print("\n[dim]Goodbye![/dim]\n")
+                break
+
+            if not question.strip():
+                continue
+
+            # Handle special commands
+            if question.startswith('/'):
+                cmd = question.lower().strip()
+
+                if cmd == '/stats':
+                    console.print()
+                    console.print("[bold]Database Statistics:[/bold]")
+                    console.print(f"  Total facts: [cyan]{len(all_facts)}[/cyan]")
+
+                    fact_types = {}
+                    for fact in all_facts:
+                        ft = fact.get("fact_type", "unknown")
+                        fact_types[ft] = fact_types.get(ft, 0) + 1
+
+                    console.print("\n  [bold]By Type:[/bold]")
+                    for ft, count in sorted(fact_types.items(), key=lambda x: x[1], reverse=True):
+                        console.print(f"    {ft}: {count}")
+
+                    qv_count = sum(1 for f in all_facts if f.get("quantitative_values"))
+                    console.print(f"\n  Facts with quantitative values: [cyan]{qv_count}[/cyan] ({qv_count/len(all_facts)*100:.1f}%)")
+                    console.print()
+                    continue
+
+                elif cmd == '/help':
+                    console.print()
+                    console.print("[bold]Available Commands:[/bold]")
+                    console.print("  [cyan]/stats[/cyan]  - Show database statistics")
+                    console.print("  [cyan]/help[/cyan]   - Show this help message")
+                    console.print("  [cyan]exit[/cyan]    - Exit interactive mode")
+                    console.print()
+                    continue
+
+                else:
+                    console.print(f"[yellow]Unknown command: {cmd}[/yellow]")
+                    console.print("[dim]Type /help for available commands[/dim]\n")
+                    continue
+
+            # Query with Claude
+            console.print()
+            with console.status("[bold green]Querying..."):
+                prompt = f"""You are answering a question based on extracted facts from a document.
+
+QUESTION: {question}
+
+AVAILABLE FACTS:
+{facts_text}
+
+INSTRUCTIONS:
+1. Search through the facts to find information relevant to the question
+2. Provide a clear, direct answer with INLINE CITATIONS including source locations
+3. Cite facts inline using [Fact N, Location] notation immediately after each claim
+4. ALWAYS include the source location from the fact (e.g., "Lines 123-125") so the user can cross-check
+5. If the facts don't contain enough information to answer, say so clearly
+6. Be precise - only claim what the facts actually support
+
+Format your response as:
+ANSWER: [your answer with inline citations including locations]
+CONFIDENCE: [High/Medium/Low]
+
+SOURCE REFERENCES:
+[List each cited fact with its full location for easy cross-checking]
+
+Example format:
+ANSWER: Yes, the vendor supports SSO [Fact 42, Lines 1245-1248]. The implementation uses SAML 2.0 protocol [Fact 108, Lines 2103-2105] and integrates with Azure AD [Fact 234, Lines 3567-3569].
+CONFIDENCE: High
+
+SOURCE REFERENCES:
+- Fact 42 (Lines 1245-1248): SSO configuration details
+- Fact 108 (Lines 2103-2105): SAML 2.0 protocol implementation
+- Fact 234 (Lines 3567-3569): Azure AD integration
+"""
+                response = claude.prompt(prompt, max_tokens=4000)
+
+            console.print("[bold]Response:[/bold]")
+            console.print(response)
+            console.print()
+
+            # Extract and display cited facts
+            fact_citations = re.findall(r'\[Fact (\d+)\]', response)
+            if fact_citations and show_facts:
+                seen = set()
+                unique_citations = []
+                for num_str in fact_citations:
+                    if num_str not in seen:
+                        seen.add(num_str)
+                        unique_citations.append(num_str)
+
+                console.print("[bold]Cited Facts:[/bold]\n")
+                for num_str in unique_citations:
+                    try:
+                        idx = int(num_str) - 1
+                        if 0 <= idx < len(all_facts):
+                            fact = all_facts[idx]
+                            console.print(f"[cyan]Fact {num_str}:[/cyan] {fact.get('claim', '')}")
+                            console.print(f"  [dim]Location: {fact.get('source_location', '')}[/dim]")
+
+                            evidence = ""
+                            if "evidence_quotes" in fact and fact["evidence_quotes"]:
+                                if isinstance(fact["evidence_quotes"], list) and len(fact["evidence_quotes"]) > 0:
+                                    evidence = fact["evidence_quotes"][0].get("quote", "")
+                            elif "evidence_quote" in fact:
+                                evidence = fact.get("evidence_quote", "")
+
+                            if evidence:
+                                evidence_preview = evidence[:200] + "..." if len(evidence) > 200 else evidence
+                                console.print(f"  [dim]Evidence: \"{evidence_preview}\"[/dim]")
+                            console.print()
+                    except (ValueError, IndexError):
+                        pass
+
+            console.print("[dim]─" * 60 + "[/dim]\n")
+
+        except KeyboardInterrupt:
+            console.print("\n\n[dim]Goodbye![/dim]\n")
+            break
+        except EOFError:
+            console.print("\n\n[dim]Goodbye![/dim]\n")
+            break
+        except Exception as e:
+            console.print(f"\n[red]✗ Error: {e}[/red]\n")
 
 
 @main.command()
