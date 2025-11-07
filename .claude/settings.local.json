@@ -14,7 +14,13 @@
       "Bash(python -m py_compile:*)",
       "Bash(python -m frfr.cli:*)",
       "Bash(cat:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(tree:*)",
+      "Bash(python test_session_name.py:*)",
+      "Bash(python:*)",
+      "Bash(tee:*)",
+      "Bash(./venv/bin/python:*)"
     ],
     "deny": [],
     "ask": []

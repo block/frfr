@@ -22,6 +22,7 @@ Quick reference to find the right documentation for your needs.
 
 | Document | Purpose | Audience |
 |----------|---------|----------|
+| **[SESSION_MANAGEMENT.md](SESSION_MANAGEMENT.md)** | Document-aware sessions with LLM naming | Everyone |
 | **[ENHANCED_EXTRACTION.md](ENHANCED_EXTRACTION.md)** | Enhanced extraction guide with metadata | Developers |
 | **[IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)** | V4 implementation summary | Developers |
 | **[MAXIMUM_DEPTH_MODE.md](MAXIMUM_DEPTH_MODE.md)** | Maximum depth extraction philosophy | Developers |
@@ -48,6 +49,7 @@ Quick reference to find the right documentation for your needs.
 - **...set up authentication** → [AUTHENTICATION.md](AUTHENTICATION.md)
 - **...see current production status** → [STATUS.md](../STATUS.md)
 - **...understand V5 features** → [V5_FINAL_RESULTS.md](V5_FINAL_RESULTS.md)
+- **...learn about sessions and multi-document support** → [SESSION_MANAGEMENT.md](SESSION_MANAGEMENT.md)
 - **...learn about extraction features** → [ENHANCED_EXTRACTION.md](ENHANCED_EXTRACTION.md)
 - **...resume an interrupted extraction** → [PARALLEL_AND_RECOVERY.md](PARALLEL_AND_RECOVERY.md)
 - **...troubleshoot Docker** → [README.docker.md](README.docker.md#troubleshooting)
@@ -64,6 +66,7 @@ frfr/
 ├── README.docker.md                   # Docker guide
 ├── AUTHENTICATION.md                  # API key setup
 ├── DOCS_INDEX.md                      # This file
+├── SESSION_MANAGEMENT.md              # Document-aware sessions with LLM naming
 ├── ENHANCED_EXTRACTION.md             # Enhanced extraction guide
 ├── IMPLEMENTATION_SUMMARY.md          # Implementation summary
 ├── MAXIMUM_DEPTH_MODE.md              # Maximum depth philosophy
@@ -114,8 +117,9 @@ frfr/
 ### End Users
 1. [QUICKSTART.md](QUICKSTART.md) - Get started in 3 commands
 2. [README.md](../README.md) - Full usage guide
-3. [AUTHENTICATION.md](AUTHENTICATION.md) - Set up API access
-4. [PARALLEL_AND_RECOVERY.md](PARALLEL_AND_RECOVERY.md) - Resume interrupted work
+3. [SESSION_MANAGEMENT.md](SESSION_MANAGEMENT.md) - Sessions and multi-document support
+4. [AUTHENTICATION.md](AUTHENTICATION.md) - Set up API access
+5. [PARALLEL_AND_RECOVERY.md](PARALLEL_AND_RECOVERY.md) - Resume interrupted work
 
 ### Developers (New)
 1. [README.md](README.md) - Project overview
@@ -154,4 +158,4 @@ All documentation follows these principles:
 
 ---
 
-**Last updated**: 2025-11-04 - V5 production-ready with 35% QV coverage, 17 active docs
+**Last updated**: 2025-11-05 - V5 production-ready with 35% QV coverage, document-aware sessions, 18 active docs

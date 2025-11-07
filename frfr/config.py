@@ -31,6 +31,8 @@ class FrfrConfig:
 
     # Storage
     session_storage_dir: str = ".frfr_sessions"
+    inputs_dir: str = "inputs"
+    outputs_dir: str = "outputs"
 
     # API configuration (assumes pre-configured environment)
     anthropic_api_key: Optional[str] = None  # Falls back to ANTHROPIC_API_KEY env var

@@ -44,3 +44,12 @@ Thumbs.db
 # Session data
 sessions/*/
 !sessions/.gitkeep
+.frfr_sessions/
+
+# Input/Output directories
+inputs/
+outputs/
+
+# Legacy output directory
+output/
+documents/

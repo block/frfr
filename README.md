@@ -4,7 +4,36 @@ High-confidence document Q&A system using LLM swarm consensus with hallucination
 
 > **Quick Links**: [🚀 Quick Start](docs/QUICKSTART.md) | [Docker Guide](docs/README.docker.md) | [Design Doc](docs/DESIGN.md) | [All Docs](docs/DOCS_INDEX.md)
 
-**Ready to process your PDF?** Use `frfr process` for one-command extraction and querying, or see [QUICKSTART.md](docs/QUICKSTART.md) for details.
+**Ready to process your PDF?**
+- **Interactive TUI**: Simply run `frfr` to launch the Terminal User Interface for visual session management
+- **CLI Mode**: Use `frfr process` for one-command extraction and querying, or see [QUICKSTART.md](docs/QUICKSTART.md) for details
+
+## Interface Options
+
+### Terminal User Interface (TUI) - Default
+
+Run `frfr` without any arguments to launch the interactive TUI:
+
+```bash
+frfr
+```
+
+The TUI provides:
+- **Session Browser**: View and navigate all sessions with document counts and fact statistics
+- **Session Detail View**: Explore documents within a session
+- **Facts Browser**: Filter and search through extracted facts with real-time search
+- **Query Interface**: Ask natural language questions about your facts
+- **Keyboard Navigation**: Full keyboard shortcuts (`q` to quit, `?` for help, `ESC` to go back)
+
+### Command Line Interface (CLI)
+
+All CLI commands are still available:
+
+```bash
+frfr <command>           # Use specific CLI command
+frfr --cli               # Show CLI help
+frfr tui                 # Explicitly launch TUI
+```
 
 ## Overview
 
@@ -18,6 +47,8 @@ Frfr extracts structured, validated facts from complex documents (SOC2 reports, 
 5. ✅ Real-time validation against source text
 6. ✅ Parallel processing with resume capability
 7. ✅ Post-processing pipeline (QV tagging, filtering)
+8. ✅ Document-aware sessions with intelligent naming
+9. ✅ Multi-document support with automatic session renaming
 
 **Planned Features (Future Phases):**
 - 🔮 Multiple LLM instances with swarm consensus
@@ -31,10 +62,16 @@ Frfr extracts structured, validated facts from complex documents (SOC2 reports, 
 ### Current Implementation (Phase 1: Extraction & Validation) ✅
 
 ```
-┌─────────────────┐
-│   CLI Interface │
-│  (Rich Console) │
-└────────┬────────┘
+┌─────────────────────────────────────────┐
+│          User Interface                 │
+│  ┌────────────────┐  ┌───────────────┐ │
+│  │  TUI (Textual) │  │ CLI (Rich)    │ │
+│  │  - Session     │  │ - One-command │ │
+│  │    Browser     │  │   workflow    │ │
+│  │  - Facts View  │  │ - Scriptable  │ │
+│  │  - Query UI    │  │               │ │
+│  └────────────────┘  └───────────────┘ │
+└────────┬────────────────────────────────┘
          │
          ▼
 ┌────────────────────────────────────────┐
@@ -99,7 +136,17 @@ frfr/
 │   ├── __init__.py
 │   ├── cli.py                      # ✅ CLI interface (7 commands)
 │   ├── config.py                   # ✅ Configuration management
-│   ├── session.py                  # ✅ Session tracking & resume
+│   ├── session.py                  # ✅ Document-aware sessions w/ LLM naming
+│   ├── tui/                        # ✅ Terminal User Interface
+│   │   ├── __init__.py
+│   │   ├── app.py                 # ✅ Main TUI application
+│   │   ├── state.py               # ✅ Application state management
+│   │   ├── screens/               # ✅ TUI screens
+│   │   │   ├── home.py           # ✅ Session browser
+│   │   │   ├── session_detail.py # ✅ Session detail view
+│   │   │   ├── facts_browser.py  # ✅ Facts filtering & search
+│   │   │   └── query.py          # ✅ Query interface
+│   │   └── widgets/               # ✅ Custom widgets
 │   ├── documents/
 │   │   ├── __init__.py
 │   │   └── pdf_extractor.py       # ✅ PDF OCR + PyPDF2 extraction
@@ -353,6 +400,88 @@ Returns:
 }
 ```
 
+## Document-Aware Sessions
+
+Frfr uses intelligent session management to organize your document processing:
+
+### Session Structure
+
+```
+project/
+├── inputs/                    # Symlinks to original PDFs
+│   ├── doc1.pdf -> /original/path/doc1.pdf
+│   └── doc2.pdf -> /another/path/doc2.pdf
+├── outputs/                   # All transformations
+│   ├── doc1_text.txt
+│   ├── doc1_facts.json
+│   ├── doc2_text.txt
+│   └── doc2_facts.json
+└── .frfr_sessions/           # Session working data
+    └── sess_vendor_security_assessment_20251105_164525/
+        ├── metadata.json     # Document registry & history
+        ├── summaries/        # LLM-generated summaries
+        ├── facts/           # Per-chunk extracted facts
+        └── chunks/          # Original chunk text
+```
+
+### Intelligent Session Naming
+
+Sessions are automatically named using Claude LLM based on your documents:
+
+```bash
+# Single document
+frfr process soc2_audit_report.pdf
+# Creates: sess_soc2_audit_report_20251105_164525
+
+# Multiple documents
+frfr process vendor_security.pdf compliance_docs.pdf risk_assessment.pdf
+# Creates: sess_vendor_security_compliance_20251105_164531
+# (Claude generates a succinct title from document names)
+```
+
+### Automatic Session Renaming
+
+As you add documents, the session name updates to stay topical:
+
+```bash
+# Start with first document
+frfr process vendor_questionnaire.pdf
+# Session: sess_vendor_questionnaire_20251105_173454
+
+# Add second document - session automatically renamed!
+frfr process vendor_questionnaire.pdf compliance_report.pdf
+# Session: sess_security_compliance_documentation_20251105_173454
+# ℹ  Session name updated to reflect documents
+
+# Add third document - renamed again!
+frfr process vendor_questionnaire.pdf compliance_report.pdf risk_assessment.pdf
+# Session: sess_security_compliance_assessment_20251105_173454
+# ℹ  Session name updated to reflect documents
+```
+
+All renames are tracked in session metadata with complete history.
+
+### Multi-Document Sessions
+
+Process multiple PDFs in a single session for cross-document analysis:
+
+```bash
+# Process multiple documents together
+frfr process doc1.pdf doc2.pdf doc3.pdf
+
+# Or build up a session over time
+frfr process doc1.pdf --session-id my_session
+frfr process doc2.pdf --session-id my_session  # Adds to existing session
+frfr process doc3.pdf --session-id my_session  # Session name updates
+```
+
+Each document is tracked with:
+- Original PDF path (absolute)
+- Symlink in `inputs/`
+- Text file in `outputs/`
+- Facts file in `outputs/`
+- Processing status (pending/processing/completed/failed)
+
 ## Usage
 
 ### Quick Start: Process Command (One-Shot)
@@ -360,8 +489,11 @@ Returns:
 The `process` supercommand runs the complete pipeline from PDF to interactive querying in one command:
 
 ```bash
-# Process a PDF from start to finish
+# Process a single PDF from start to finish
 frfr process documents/soc2_report.pdf
+
+# Process multiple PDFs in one session
+frfr process documents/doc1.pdf documents/doc2.pdf documents/doc3.pdf
 
 # With custom settings
 frfr process documents/report.pdf \
@@ -371,6 +503,9 @@ frfr process documents/report.pdf \
 
 # Process without entering interactive mode
 frfr process documents/report.pdf --no-interactive
+
+# Use a specific session ID
+frfr process documents/report.pdf --session-id my_custom_session
 ```
 
 This command:
@@ -439,12 +574,15 @@ Confidence: High (multiple sources)
 #### Process Command (Supercommand)
 
 ```bash
-# Basic usage
+# Basic usage - single document
 frfr process documents/report.pdf
+
+# Multiple documents in one session
+frfr process documents/doc1.pdf documents/doc2.pdf documents/doc3.pdf
 
 # With custom settings
 frfr process documents/report.pdf \
-  --document-name my_doc \
+  --session-id my_session     # Use specific session ID (optional)
   --max-workers 11            # Parallel Claude processes (default: 5)
   --chunk-size 500            # Lines per chunk (default: 500)
   --overlap 100               # Overlap between chunks (default: 100)
@@ -560,7 +698,9 @@ Generated reports include:
 - ✅ Multiple evidence quotes support (V5)
 - ✅ Real-time validation (100% rate achieved)
 - ✅ Parallel processing (5-11 workers)
-- ✅ Session management with resume capability
+- ✅ Document-aware sessions with LLM naming
+- ✅ Automatic session renaming as documents are added
+- ✅ Multi-document support with cross-document queries
 - ✅ Post-processing pipeline (QV tagging, filtering)
 - ✅ Comprehensive CLI (7 commands)
 

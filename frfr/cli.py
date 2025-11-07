@@ -5,6 +5,7 @@ Command-line interface for Frfr.
 import sys
 import os
 import click
+from datetime import datetime
 from pathlib import Path
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
@@ -14,21 +15,28 @@ from frfr.documents import extract_pdf_to_text, get_pdf_info
 from frfr.extraction.fact_extractor import FactExtractor
 from frfr.session import Session
 from frfr.validation import validate_consolidated_facts
+from frfr.config import default_config
 
 
 console = Console()
 
 
-@click.group()
+@click.group(invoke_without_command=True)
 @click.version_option(version="0.1.0")
-def main():
+@click.option("--cli", is_flag=True, help="Use CLI mode instead of TUI")
+@click.pass_context
+def main(ctx, cli):
     """Frfr: High-confidence document Q&A using LLM swarm consensus."""
-    pass
+    # If no subcommand is provided and --cli flag is not set, launch TUI
+    if ctx.invoked_subcommand is None and not cli:
+        from frfr.tui.app import run_tui
+        run_tui()
+        ctx.exit()
 
 
 @main.command()
 @click.argument("pdf_path", type=click.Path(exists=True))
-@click.argument("output_path", type=click.Path())
+@click.argument("output_path", type=click.Path(), required=False)
 @click.option(
     "--min-text-threshold",
     default=50,
@@ -44,12 +52,19 @@ def extract(pdf_path: str, output_path: str, min_text_threshold: int, save_metad
     Extract text from a PDF file.
 
     PDF_PATH: Path to the input PDF file
-    OUTPUT_PATH: Path to save the extracted text file
+    OUTPUT_PATH: (Optional) Path to save the extracted text file. Defaults to outputs/<filename>_text.txt
     """
     console.print("\n[bold blue]📄 PDF Text Extraction[/bold blue]\n")
 
     pdf_path = Path(pdf_path)
-    output_path = Path(output_path)
+
+    # Default output path to outputs/ directory
+    if output_path is None:
+        outputs_dir = Path(default_config.outputs_dir)
+        outputs_dir.mkdir(parents=True, exist_ok=True)
+        output_path = outputs_dir / f"{pdf_path.stem}_text.txt"
+    else:
+        output_path = Path(output_path)
 
     # Get PDF info
     with Progress(
@@ -150,12 +165,13 @@ def info(pdf_path: str):
 @click.argument("text_file", type=click.Path(exists=True))
 @click.option("--document-name", help="Name of the document (defaults to filename)")
 @click.option("--session-id", help="Session ID (creates new if not provided)")
-@click.option("--chunk-size", default=500, help="Lines per chunk (default: 500)")
-@click.option("--overlap", default=100, help="Overlap lines between chunks (default: 100)")
+@click.option("--chunk-size", default=50, help="Lines per chunk (default: 50)")
+@click.option("--overlap", default=10, help="Overlap lines between chunks (default: 10)")
 @click.option("--start-chunk", default=0, help="Start extraction from this chunk (for resume)")
 @click.option("--end-chunk", default=None, type=int, help="End extraction at this chunk (inclusive)")
-@click.option("--max-workers", default=5, help="Maximum parallel Claude processes (default: 5)")
+@click.option("--max-workers", default=20, help="Maximum parallel Claude processes (default: 20)")
 @click.option("--multipass", is_flag=True, help="Enable multi-pass extraction (CUECs, test procedures, quantitative, technical specs)")
+@click.option("--resume-incomplete", is_flag=True, help="Resume processing by only processing incomplete chunks")
 def extract_facts_cmd(
     text_file: str,
     document_name: str,
@@ -166,6 +182,7 @@ def extract_facts_cmd(
     end_chunk: int,
     max_workers: int,
     multipass: bool,
+    resume_incomplete: bool,
 ):
     """
     Extract structured facts from a document using LLM.
@@ -174,7 +191,7 @@ def extract_facts_cmd(
 
     This command:
     1. Generates a structured summary of the document
-    2. Chunks the document with sliding window (default: 500 lines, 100 overlap)
+    2. Chunks the document with sliding window (default: 50 lines, 10 overlap)
     3. Extracts facts from each chunk using the summary as context
     4. Saves all artifacts in a session directory
 
@@ -186,8 +203,19 @@ def extract_facts_cmd(
     if not document_name:
         document_name = text_file.stem
 
-    # Create session
-    session = Session(session_id=session_id)
+    # Generate session ID from document name if not provided
+    if session_id is None:
+        with console.status("[bold green]Generating session name..."):
+            session_id = Session.generate_session_id([document_name], use_llm=True)
+        console.print(f"[green]✓[/green] Generated session name: [cyan]{session_id}[/cyan]")
+
+    # Create session with config
+    session = Session(
+        session_id=session_id,
+        base_dir=default_config.session_storage_dir,
+        inputs_dir=default_config.inputs_dir,
+        outputs_dir=default_config.outputs_dir,
+    )
     console.print(f"[green]✓[/green] Session: [cyan]{session.session_id}[/cyan]")
     console.print(f"  Directory: [dim]{session.session_dir}[/dim]\n")
 
@@ -265,10 +293,43 @@ def extract_facts_cmd(
                 end_chunk=end_chunk,
                 progress_callback=update_progress,
                 enable_multipass=multipass,
+                resume_incomplete=resume_incomplete,
             )
 
         # Display results
         console.print("\n[green]✅ Extraction complete![/green]\n")
+
+        # Auto-consolidate facts at the end
+        console.print("[bold blue]📦 Consolidating facts...[/bold blue]\n")
+
+        # Load summary and all facts
+        summary = session.load_summary(document_name)
+        facts_list = session.load_all_facts(document_name)
+
+        # Create consolidated structure with source tracking
+        consolidated = {
+            "session_id": session.session_id,
+            "documents": {
+                document_name: {
+                    "summary": summary,
+                    "facts": facts_list,
+                    "fact_count": len(facts_list),
+                    "source_text_file": str(text_file),  # Track the text file used
+                }
+            },
+            "total_facts": len(facts_list),
+        }
+
+        # Save to outputs directory
+        output_dir = Path(default_config.outputs_dir)
+        output_dir.mkdir(exist_ok=True)
+        output_file = output_dir / f"{document_name}_facts.json"
+
+        import json
+        with open(output_file, "w") as f:
+            json.dump(consolidated, f, indent=2)
+
+        console.print(f"[green]✓[/green] Facts saved: [cyan]{output_file}[/cyan]\n")
 
         # Create summary table
         table = Table(title="Extraction Results")
@@ -300,38 +361,6 @@ def extract_facts_cmd(
         console.print(f"[dim]Session directory: {stats['session_dir']}[/dim]")
         console.print(f"[dim]Total chunks: {stats['total_chunks']}[/dim]")
         console.print(f"[dim]Total fact files: {stats['total_fact_files']}[/dim]\n")
-
-        # Auto-consolidate facts
-        console.print("[bold blue]📦 Consolidating facts...[/bold blue]\n")
-
-        # Load summary and all facts
-        summary = session.load_summary(document_name)
-        facts_list = session.load_all_facts(document_name)
-
-        # Create consolidated structure with source tracking
-        consolidated = {
-            "session_id": session.session_id,
-            "documents": {
-                document_name: {
-                    "summary": summary,
-                    "facts": facts_list,
-                    "fact_count": len(facts_list),
-                    "source_text_file": str(text_file),  # Track the text file used
-                }
-            },
-            "total_facts": len(facts_list),
-        }
-
-        # Save to output directory
-        output_dir = Path("output")
-        output_dir.mkdir(exist_ok=True)
-        output_file = output_dir / f"{document_name}_facts.json"
-
-        import json
-        with open(output_file, "w") as f:
-            json.dump(consolidated, f, indent=2)
-
-        console.print(f"[green]✓[/green] Consolidated facts saved: [cyan]{output_file}[/cyan]\n")
 
     except Exception as e:
         console.print(f"\n[red]✗ Extraction failed: {e}[/red]\n")
@@ -438,17 +467,18 @@ def consolidate_facts_cmd(session_id: str, output: str, document_name: str):
 
 @main.command("validate-facts")
 @click.argument("consolidated_file", type=click.Path(exists=True))
-@click.argument("text_file", type=click.Path(exists=True))
+@click.argument("text_file", type=click.Path(exists=True), required=False)
 @click.option("--show-invalid-only", is_flag=True, help="Only show invalid facts")
 @click.option("--output", "-o", help="Save validation report to JSON file")
+@click.option("--update-facts", is_flag=True, help="Update facts file with recovered/corrected quotes")
 def validate_facts_cmd(
-    consolidated_file: str, text_file: str, show_invalid_only: bool, output: str
+    consolidated_file: str, text_file: str, show_invalid_only: bool, output: str, update_facts: bool
 ):
     """
     Validate extracted facts against source text.
 
     CONSOLIDATED_FILE: Path to consolidated_facts.json
-    TEXT_FILE: Path to the original source text file
+    TEXT_FILE: (Optional) Path to the original source text file. If not provided, will try to auto-locate from facts file.
 
     This command verifies that all evidence quotes actually exist in the
     specified line ranges of the source document.
@@ -456,7 +486,33 @@ def validate_facts_cmd(
     console.print("\n[bold blue]✓ Validating Facts[/bold blue]\n")
 
     consolidated_path = Path(consolidated_file)
-    text_path = Path(text_file)
+
+    # Auto-locate text file if not provided
+    if text_file is None:
+        import json
+        try:
+            with open(consolidated_path, "r") as f:
+                data = json.load(f)
+
+            # Try to get text file from consolidated facts
+            if "documents" in data and data["documents"]:
+                # Get first document's text file
+                first_doc = next(iter(data["documents"].values()))
+                text_file_path = first_doc.get("source_text_file")
+                if text_file_path and Path(text_file_path).exists():
+                    text_path = Path(text_file_path)
+                    console.print(f"[green]✓[/green] Auto-located text file: [cyan]{text_path.name}[/cyan]")
+                else:
+                    console.print(f"[red]✗ Could not auto-locate text file. Please provide TEXT_FILE argument.[/red]\n")
+                    sys.exit(1)
+            else:
+                console.print(f"[red]✗ Could not auto-locate text file. Please provide TEXT_FILE argument.[/red]\n")
+                sys.exit(1)
+        except Exception as e:
+            console.print(f"[red]✗ Error reading facts file: {e}[/red]\n")
+            sys.exit(1)
+    else:
+        text_path = Path(text_file)
 
     console.print(f"[green]✓[/green] Consolidated facts: [cyan]{consolidated_path.name}[/cyan]")
     console.print(f"[green]✓[/green] Source text: [cyan]{text_path.name}[/cyan]\n")
@@ -476,12 +532,21 @@ def validate_facts_cmd(
 
         summary_table.add_row("Total Facts", str(stats["total_facts"]))
         summary_table.add_row("Valid Facts", str(stats["valid_facts"]))
-        summary_table.add_row(
-            "Near Match Facts",
-            f"[yellow]{stats.get('near_match_facts', 0)}[/yellow]"
-            if stats.get("near_match_facts", 0) > 0
-            else "0",
-        )
+
+        # Show recovered facts
+        if stats.get('recovered_facts', 0) > 0:
+            summary_table.add_row(
+                "  ↳ Recovered via LLM",
+                f"[green]{stats['recovered_facts']}[/green]",
+            )
+
+        # Show failed near matches that couldn't be recovered
+        if stats.get('near_match_failed', 0) > 0:
+            summary_table.add_row(
+                "Near Match (Failed Recovery)",
+                f"[yellow]{stats['near_match_failed']}[/yellow]",
+            )
+
         summary_table.add_row(
             "Invalid Facts",
             f"[red]{stats['invalid_facts']}[/red]"
@@ -492,14 +557,14 @@ def validate_facts_cmd(
             "Validation Rate", f"{stats['validation_rate']:.1%}"
         )
         summary_table.add_row(
-            "Near Match Rate", f"{stats.get('near_match_rate', 0):.1%}"
+            "Recovery Rate", f"{stats.get('recovery_rate', 0):.1%}"
         )
 
         console.print(summary_table)
         console.print()
 
         # Show detailed results
-        if stats["invalid_facts"] > 0 or stats.get("near_match_facts", 0) > 0 or not show_invalid_only:
+        if stats["invalid_facts"] > 0 or stats.get("near_match_failed", 0) > 0 or not show_invalid_only:
             results_table = Table(title="Validation Details")
             results_table.add_column("#", style="dim", width=4)
             results_table.add_column("Status", width=12)
@@ -557,15 +622,65 @@ def validate_facts_cmd(
 
             console.print(f"[green]✓[/green] Validation report saved: [cyan]{output_path}[/cyan]\n")
 
-        # Exit with error if any facts invalid (but not for near matches)
+        # Update facts file with recovered quotes if requested
+        if update_facts and stats.get("recovered_facts", 0) > 0:
+            console.print("[cyan]Updating facts file with recovered quotes...[/cyan]")
+
+            import json
+            # Load original facts
+            with open(consolidated_path) as f:
+                facts_data = json.load(f)
+
+            # Update facts with corrected quotes
+            updated_count = 0
+            if "documents" in facts_data:
+                for doc_name, doc_data in facts_data["documents"].items():
+                    facts_list = doc_data.get("facts", [])
+                    for result in results:
+                        if result.is_valid and result.was_recovered and result.fact_index < len(facts_list):
+                            fact = facts_list[result.fact_index]
+                            # Update with corrected quote
+                            if result.corrected_quote:
+                                # Handle both V4 and V5 formats
+                                if "evidence_quotes" in fact:
+                                    # V5: Update first quote
+                                    if isinstance(fact["evidence_quotes"], list) and len(fact["evidence_quotes"]) > 0:
+                                        if isinstance(fact["evidence_quotes"][0], dict):
+                                            fact["evidence_quotes"][0]["quote"] = result.corrected_quote
+                                        else:
+                                            fact["evidence_quotes"][0] = result.corrected_quote
+                                else:
+                                    # V4: Update single quote
+                                    fact["evidence_quote"] = result.corrected_quote
+
+                                if result.corrected_location:
+                                    fact["source_location"] = result.corrected_location
+
+                                updated_count += 1
+
+            # Write back to file
+            with open(consolidated_path, "w") as f:
+                json.dump(facts_data, f, indent=2)
+
+            console.print(f"[green]✓ Updated {updated_count} fact(s) in {consolidated_path}[/green]\n")
+
+        # Exit with error if any facts invalid
         if stats["invalid_facts"] > 0:
             console.print(
                 f"[yellow]⚠ Warning: {stats['invalid_facts']} fact(s) failed validation[/yellow]\n"
             )
             sys.exit(1)
-        elif stats.get("near_match_facts", 0) > 0:
+
+        # Show success message for recovered facts
+        if stats.get("recovered_facts", 0) > 0:
             console.print(
-                f"[yellow]⚠ Note: {stats['near_match_facts']} fact(s) are near matches (~75-89% match)[/yellow]\n"
+                f"[green]✓ Successfully recovered {stats['recovered_facts']} fact(s) via LLM enrichment[/green]\n"
+            )
+
+        # Warn about failed near matches
+        if stats.get("near_match_failed", 0) > 0:
+            console.print(
+                f"[yellow]⚠ Note: {stats['near_match_failed']} near match(es) (75-89%) could not be recovered[/yellow]\n"
             )
 
     except Exception as e:
@@ -804,17 +919,19 @@ def query_cmd(facts_file: str, question: str, interactive: bool, show_facts: boo
         if source_doc_name:
             # Use source_doc name from facts
             base_name = Path(source_doc_name).stem
+            outputs_dir = default_config.outputs_dir
             search_patterns = [
-                f"output/{base_name}*.txt",
-                f"output/*{base_name}*.txt",
+                f"{outputs_dir}/{base_name}*.txt",
+                f"{outputs_dir}/*{base_name}*.txt",
                 f"{base_name}*.txt",
             ]
 
         # Also try pattern matching facts filename
         facts_base = facts_path.stem.replace("_facts", "").replace("_qv_tagged", "").replace("_filtered", "")
+        outputs_dir = default_config.outputs_dir
         search_patterns.extend([
-            f"output/{facts_base}*.txt",
-            f"output/*{facts_base}*.txt",
+            f"{outputs_dir}/{facts_base}*.txt",
+            f"{outputs_dir}/*{facts_base}*.txt",
         ])
 
         # Search for source text file
@@ -826,7 +943,7 @@ def query_cmd(facts_file: str, question: str, interactive: bool, show_facts: boo
 
         if not source_text_path:
             console.print("[yellow]⚠ Warning: Could not find source text file automatically[/yellow]")
-            console.print("[dim]Searched for patterns like: output/{document_name}*.txt[/dim]")
+            console.print(f"[dim]Searched for patterns like: {default_config.outputs_dir}/{{document_name}}*.txt[/dim]")
             console.print("[yellow]Continuing without deep search context...[/yellow]\n")
         else:
             try:
@@ -1357,18 +1474,19 @@ SOURCE REFERENCES:
 
 
 @main.command("process")
-@click.argument("pdf_path", type=click.Path(exists=True))
-@click.option("--document-name", help="Name of the document (defaults to filename)")
-@click.option("--chunk-size", default=500, help="Lines per chunk for fact extraction (default: 500)")
-@click.option("--overlap", default=100, help="Overlap lines between chunks (default: 100)")
-@click.option("--max-workers", default=5, help="Maximum parallel Claude processes (default: 5)")
+@click.argument("pdf_paths", type=click.Path(exists=True), nargs=-1, required=True)
+@click.option("--session-id", help="Session ID (creates new if not provided)")
+@click.option("--chunk-size", default=50, help="Lines per chunk for fact extraction (default: 50)")
+@click.option("--overlap", default=10, help="Overlap lines between chunks (default: 10)")
+@click.option("--max-workers", default=20, help="Maximum parallel Claude processes (default: 20)")
 @click.option("--multipass", is_flag=True, help="Enable multi-pass extraction")
 @click.option("--skip-validation", is_flag=True, help="Skip fact validation step")
 @click.option("--no-interactive", is_flag=True, help="Skip interactive mode (just process)")
 @click.option("--show-facts", is_flag=True, help="Show supporting facts in interactive mode")
+@click.option("--resume-incomplete", is_flag=True, help="Resume processing by only processing incomplete chunks")
 def process_cmd(
-    pdf_path: str,
-    document_name: str,
+    pdf_paths: tuple,
+    session_id: str,
     chunk_size: int,
     overlap: int,
     max_workers: int,
@@ -1376,208 +1494,299 @@ def process_cmd(
     skip_validation: bool,
     no_interactive: bool,
     show_facts: bool,
+    resume_incomplete: bool,
 ):
     """
-    Process a PDF from start to finish: extract text, extract facts, validate, and query.
+    Process PDF(s) from start to finish: extract text, extract facts, validate, and query.
 
-    PDF_PATH: Path to the input PDF file
+    PDF_PATHS: One or more paths to PDF files
 
     This supercommand combines all steps:
-    1. Extract PDF to text
+    1. Extract PDF to text (creates symlink in inputs/)
     2. Extract facts using LLM
     3. Validate facts against source
     4. Launch interactive query mode
 
     Example:
         frfr process documents/soc2_report.pdf
-        frfr process documents/report.pdf --max-workers 11 --multipass
+        frfr process documents/report1.pdf documents/report2.pdf --multipass
     """
     console.print("\n[bold blue]🚀 Frfr Complete Processing Pipeline[/bold blue]\n")
 
-    pdf_path = Path(pdf_path)
-    if not document_name:
+    # Generate session ID from document names if not provided
+    if session_id is None:
+        document_names = [Path(p).stem for p in pdf_paths]
+        console.print(f"[dim]Generating session name from documents: {', '.join(document_names)}[/dim]")
+
+        with console.status("[bold green]Generating session name..."):
+            session_id = Session.generate_session_id(document_names, use_llm=True)
+
+        console.print(f"[green]✓[/green] Generated session name: [cyan]{session_id}[/cyan]\n")
+
+    # Create session with config
+    session = Session(
+        session_id=session_id,
+        base_dir=default_config.session_storage_dir,
+        inputs_dir=default_config.inputs_dir,
+        outputs_dir=default_config.outputs_dir,
+    )
+    console.print(f"[green]✓[/green] Session: [cyan]{session.session_id}[/cyan]")
+    console.print(f"  Directory: [dim]{session.session_dir}[/dim]\n")
+
+    # Process each PDF
+    all_documents = []
+    for pdf_path_str in pdf_paths:
+        pdf_path = Path(pdf_path_str)
         document_name = pdf_path.stem
 
-    # Setup paths
-    output_dir = Path("output")
-    output_dir.mkdir(exist_ok=True)
+        console.print(f"[bold blue]Processing: {pdf_path.name}[/bold blue]\n")
 
-    text_file = output_dir / f"{document_name}_text.txt"
-    facts_file = output_dir / f"{document_name}_facts.json"
-
-    # ========== STEP 1: Extract PDF to Text ==========
-    console.print("[bold cyan]Step 1/4: Extracting PDF text[/bold cyan]\n")
-
-    try:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            progress.add_task("Analyzing PDF...", total=None)
-            info = get_pdf_info(pdf_path)
-
-        console.print(f"[green]✓[/green] PDF: [cyan]{pdf_path.name}[/cyan] ({info['pages']} pages)")
-
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            progress.add_task(f"Extracting text from {info['pages']} pages...", total=None)
-            result = extract_pdf_to_text(pdf_path=pdf_path, output_path=text_file)
-
-        console.print(f"[green]✓[/green] Extracted {result['total_chars']:,} characters using {result['method']}")
-        console.print(f"[dim]  → {text_file}[/dim]\n")
-
-    except Exception as e:
-        console.print(f"[red]✗ PDF extraction failed: {e}[/red]\n")
-        sys.exit(1)
-
-    # ========== STEP 2: Extract Facts ==========
-    console.print("[bold cyan]Step 2/4: Extracting facts with LLM[/bold cyan]\n")
-
-    session = Session()
-    console.print(f"[green]✓[/green] Session: [cyan]{session.session_id}[/cyan]")
-    console.print(f"  Chunk size: {chunk_size} lines, Overlap: {overlap} lines")
-    console.print(f"  Workers: {max_workers}, Multipass: {multipass}")
-
-    extractor = FactExtractor(
-        chunk_size=chunk_size,
-        overlap_size=overlap,
-        max_workers=max_workers,
-    )
-
-    # Calculate total chunks to provide better progress info
-    with open(text_file, "r") as f:
-        text = f.read()
-    chunks = extractor.chunk_text(text)
-    total_chunks = len(chunks)
-    total_lines = len(text.split('\n'))
-
-    console.print(f"  Document: {total_lines:,} lines → {total_chunks} chunks\n")
-
-    try:
-        # Track running totals
-        running_facts = 0
-
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            TimeRemainingColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task("[cyan]Processing chunks...", total=total_chunks)
-
-            def update_progress(current, total, message):
-                nonlocal running_facts
-                # Extract fact count from message
-                import re
-                match = re.search(r'(\d+) facts validated', message)
-                if match:
-                    chunk_facts = int(match.group(1))
-                    running_facts += chunk_facts
-                    desc = f"[cyan]Chunk {current}/{total} • {running_facts} facts extracted"
-                else:
-                    desc = f"[cyan]{message}"
-                progress.update(task, completed=current, description=desc)
-
-            extraction_result = extractor.extract_from_document(
-                text_file=text_file,
-                document_name=document_name,
-                session=session,
-                progress_callback=update_progress,
-                enable_multipass=multipass,
-            )
-
-        console.print(f"\n[green]✓[/green] Extracted {len(extraction_result.facts)} facts ({len(extraction_result.facts)/total_chunks:.1f} facts/chunk avg)")
-
-        # Consolidate facts
-        summary = session.load_summary(document_name)
-        facts_list = session.load_all_facts(document_name)
-
-        consolidated = {
-            "session_id": session.session_id,
-            "documents": {
-                document_name: {
-                    "summary": summary,
-                    "facts": facts_list,
-                    "fact_count": len(facts_list),
-                    "source_text_file": str(text_file),
-                }
-            },
-            "total_facts": len(facts_list),
-        }
-
-        import json
-        with open(facts_file, "w") as f:
-            json.dump(consolidated, f, indent=2)
-
-        console.print(f"[dim]  → {facts_file}[/dim]\n")
-
-    except Exception as e:
-        console.print(f"[red]✗ Fact extraction failed: {e}[/red]\n")
-        import traceback
-        console.print(f"[dim]{traceback.format_exc()}[/dim]")
-        sys.exit(1)
-
-    # ========== STEP 3: Validate Facts ==========
-    if not skip_validation:
-        console.print("[bold cyan]Step 3/4: Validating facts[/bold cyan]\n")
-
+        # Add document to session (creates symlink)
         try:
-            with console.status("[bold green]Validating facts..."):
-                results, stats = validate_consolidated_facts(facts_file, text_file)
+            with console.status("[bold green]Registering document..."):
+                doc_info = session.add_document(str(pdf_path), document_name)
 
-            console.print(f"[green]✓[/green] Validated {stats['total_facts']} facts")
-            console.print(f"  Valid: {stats['valid_facts']} ({stats['validation_rate']:.1%})")
+            console.print(f"[green]✓[/green] Document registered: [cyan]{document_name}[/cyan]")
+            console.print(f"  Symlink: [dim]{doc_info['symlink_path']}[/dim]")
+            console.print(f"  Text output: [dim]{doc_info['text_file']}[/dim]")
+            console.print(f"  Facts output: [dim]{doc_info['facts_file']}[/dim]")
 
-            if stats.get('near_match_facts', 0) > 0:
-                console.print(f"  [yellow]Near Match: {stats['near_match_facts']} ({stats.get('near_match_rate', 0):.1%})[/yellow]")
-
-            if stats['invalid_facts'] > 0:
-                console.print(f"  [red]Invalid: {stats['invalid_facts']}[/red]")
+            # Show session rename notification if applicable
+            if doc_info.get("session_renamed"):
+                new_name = doc_info.get("new_session_id")
+                console.print(f"\n[cyan]ℹ[/cyan]  Session name updated to reflect documents: [cyan]{new_name}[/cyan]")
 
             console.print()
+        except Exception as e:
+            console.print(f"[red]✗ Failed to register document: {e}[/red]\n")
+            sys.exit(1)
+
+        text_file = Path(doc_info['text_file'])
+        facts_file = Path(doc_info['facts_file'])
+
+        # Update document status
+        session.update_document_status(document_name, "processing")
+
+        # ========== STEP 1: Extract PDF to Text ==========
+        # Skip if resuming and text file already exists
+        if resume_incomplete and text_file.exists():
+            console.print(f"[bold cyan]Step 1/4: PDF text (using existing)[/bold cyan]\n")
+            console.print(f"[green]✓[/green] Text file already exists: [cyan]{text_file}[/cyan]")
+
+            # Get file size/lines for info
+            with open(text_file) as f:
+                text_content = f.read()
+                line_count = len(text_content.split('\n'))
+                char_count = len(text_content)
+            console.print(f"[green]✓[/green] {char_count:,} characters, {line_count:,} lines")
+            console.print(f"[yellow]⚠[/yellow]  Skipping PDF extraction (resume mode)\n")
+        else:
+            console.print(f"[bold cyan]Step 1/4: Extracting PDF text ({document_name})[/bold cyan]\n")
+
+            try:
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    console=console,
+                ) as progress:
+                    progress.add_task("Analyzing PDF...", total=None)
+                    info = get_pdf_info(pdf_path)
+
+                console.print(f"[green]✓[/green] PDF: [cyan]{pdf_path.name}[/cyan] ({info['pages']} pages)")
+
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    console=console,
+                ) as progress:
+                    progress.add_task(f"Extracting text from {info['pages']} pages...", total=None)
+                    result = extract_pdf_to_text(pdf_path=pdf_path, output_path=text_file)
+
+                console.print(f"[green]✓[/green] Extracted {result['total_chars']:,} characters using {result['method']}")
+                console.print(f"[dim]  → {text_file}[/dim]\n")
+
+            except Exception as e:
+                console.print(f"[red]✗ PDF extraction failed: {e}[/red]\n")
+                session.update_document_status(document_name, "failed", error_message=str(e))
+                sys.exit(1)
+
+        # ========== STEP 2: Extract Facts ==========
+        console.print(f"[bold cyan]Step 2/4: Extracting facts ({document_name})[/bold cyan]\n")
+
+        console.print(f"  Chunk size: {chunk_size} lines, Overlap: {overlap} lines")
+        console.print(f"  Workers: {max_workers}, Multipass: {multipass}")
+
+        extractor = FactExtractor(
+            chunk_size=chunk_size,
+            overlap_size=overlap,
+            max_workers=max_workers,
+        )
+
+        # Calculate total chunks to provide better progress info
+        with open(text_file, "r") as f:
+            text = f.read()
+        chunks = extractor.chunk_text(text)
+        total_chunks = len(chunks)
+        total_lines = len(text.split('\n'))
+
+        console.print(f"  Document: {total_lines:,} lines → {total_chunks} chunks\n")
+
+        try:
+            # Track running totals
+            running_facts = 0
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                TimeRemainingColumn(),
+                console=console,
+            ) as progress:
+                task = progress.add_task("[cyan]Processing chunks...", total=total_chunks)
+
+                def update_progress(current, total, message):
+                    nonlocal running_facts
+                    # Extract fact count from message
+                    import re
+                    match = re.search(r'(\d+) facts validated', message)
+                    if match:
+                        chunk_facts = int(match.group(1))
+                        running_facts += chunk_facts
+                        desc = f"[cyan]Chunk {current}/{total} • {running_facts} facts extracted"
+                    else:
+                        desc = f"[cyan]{message}"
+                    progress.update(task, completed=current, description=desc)
+
+                extraction_result = extractor.extract_from_document(
+                    text_file=text_file,
+                    document_name=document_name,
+                    session=session,
+                    progress_callback=update_progress,
+                    enable_multipass=multipass,
+                    resume_incomplete=resume_incomplete,
+                )
+
+            console.print(f"\n[green]✓[/green] Extracted {len(extraction_result.facts)} facts ({len(extraction_result.facts)/total_chunks:.1f} facts/chunk avg)\n")
 
         except Exception as e:
-            console.print(f"[yellow]⚠ Validation failed: {e}[/yellow]")
-            console.print("[dim]Continuing to interactive mode...[/dim]\n")
-    else:
-        console.print("[bold cyan]Step 3/4: Validation skipped[/bold cyan]\n")
+            console.print(f"[red]✗ Fact extraction failed: {e}[/red]\n")
+            import traceback
+            console.print(f"[dim]{traceback.format_exc()}[/dim]")
+            session.update_document_status(document_name, "failed", error_message=str(e))
+            sys.exit(1)
+
+        # ========== STEP 3: Consolidate & Validate Facts ==========
+        # Consolidate facts from all chunks into single file
+        console.print(f"[bold cyan]Step 3a/4: Consolidating facts ({document_name})[/bold cyan]\n")
+
+        try:
+            summary = session.load_summary(document_name)
+            facts_list = session.load_all_facts(document_name)
+
+            consolidated = {
+                "session_id": session.session_id,
+                "documents": {
+                    document_name: {
+                        "summary": summary,
+                        "facts": facts_list,
+                        "fact_count": len(facts_list),
+                        "source_text_file": str(text_file),
+                    }
+                },
+                "total_facts": len(facts_list),
+            }
+
+            import json
+
+            # Ensure the facts directory exists
+            facts_file.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(facts_file, "w") as f:
+                json.dump(consolidated, f, indent=2)
+
+            console.print(f"[green]✓[/green] Consolidated {len(facts_list)} facts")
+            console.print(f"[dim]  → {facts_file}[/dim]\n")
+
+        except Exception as e:
+            console.print(f"[red]✗ Consolidation failed: {e}[/red]\n")
+            session.update_document_status(document_name, "failed", error_message=str(e))
+            sys.exit(1)
+
+        if not skip_validation:
+            console.print(f"[bold cyan]Step 3b/4: Validating facts ({document_name})[/bold cyan]\n")
+
+            try:
+                with console.status("[bold green]Validating facts..."):
+                    results, stats = validate_consolidated_facts(facts_file, text_file)
+
+                console.print(f"[green]✓[/green] Validated {stats['total_facts']} facts")
+                console.print(f"  Valid: {stats['valid_facts']} ({stats['validation_rate']:.1%})")
+
+                if stats.get('recovered_facts', 0) > 0:
+                    console.print(f"  [green]Recovered: {stats['recovered_facts']} ({stats.get('recovery_rate', 0):.1%})[/green]")
+
+                if stats.get('near_match_failed', 0) > 0:
+                    console.print(f"  [yellow]Near Match Failed: {stats['near_match_failed']}[/yellow]")
+
+                if stats['invalid_facts'] > 0:
+                    console.print(f"  [red]Invalid: {stats['invalid_facts']}[/red]")
+
+                console.print()
+
+            except Exception as e:
+                console.print(f"[yellow]⚠ Validation failed: {e}[/yellow]")
+                console.print("[dim]Continuing...[/dim]\n")
+        else:
+            console.print(f"[bold cyan]Step 3/4: Validation skipped ({document_name})[/bold cyan]\n")
+
+        # Mark document as completed
+        session.update_document_status(document_name, "completed", completed_at=datetime.now().isoformat())
+        all_documents.append({
+            "name": document_name,
+            "text_file": str(text_file),
+            "facts_file": str(facts_file),
+        })
+
+        console.print(f"[green]✅ {document_name} processing complete![/green]\n")
+        console.print("[dim]─" * 60 + "[/dim]\n")
 
     # ========== STEP 4: Interactive Mode ==========
     if no_interactive:
         console.print("[bold cyan]Step 4/4: Interactive mode skipped[/bold cyan]\n")
-        console.print("[green]✅ Processing complete![/green]\n")
-        console.print(f"[bold]Output Files:[/bold]")
-        console.print(f"  Text: [cyan]{text_file}[/cyan]")
-        console.print(f"  Facts: [cyan]{facts_file}[/cyan]")
-        console.print(f"\n[dim]To query interactively, run:[/dim]")
-        console.print(f"[dim]  frfr interactive {facts_file}[/dim]\n")
+        console.print("[green]✅ All documents processed![/green]\n")
+        console.print(f"[bold]Processed {len(all_documents)} document(s):[/bold]")
+        for doc in all_documents:
+            console.print(f"  [cyan]{doc['name']}[/cyan]")
+            console.print(f"    Text: {doc['text_file']}")
+            console.print(f"    Facts: {doc['facts_file']}")
+        console.print(f"\n[dim]To query interactively, use the session:[/dim]")
+        console.print(f"[dim]  frfr interactive --session-id {session.session_id}[/dim]\n")
         return
 
     console.print("[bold cyan]Step 4/4: Launching interactive query mode[/bold cyan]\n")
     console.print("[green]✅ Processing complete! Entering interactive mode...[/green]\n")
     console.print("[dim]─" * 60 + "[/dim]\n")
 
-    # Load facts for interactive mode
+    # Load facts for interactive mode (all documents)
     import json
     import re
     from frfr.extraction.claude_client import ClaudeClient
 
     try:
-        with open(facts_file, "r") as f:
-            data = json.load(f)
-
         all_facts = []
         document_names = []
-        if "documents" in data:
-            for doc_name, doc_data in data["documents"].items():
-                document_names.append(doc_name)
-                all_facts.extend(doc_data.get("facts", []))
+
+        # Load facts from all processed documents
+        for doc in all_documents:
+            with open(doc['facts_file'], "r") as f:
+                data = json.load(f)
+
+            if "documents" in data:
+                for doc_name, doc_data in data["documents"].items():
+                    if doc_name not in document_names:
+                        document_names.append(doc_name)
+                    all_facts.extend(doc_data.get("facts", []))
 
         console.print(f"[green]✓[/green] Loaded [cyan]{len(all_facts)}[/cyan] facts")
         if document_names:
@@ -1756,6 +1965,13 @@ SOURCE REFERENCES:
             break
         except Exception as e:
             console.print(f"\n[red]✗ Error: {e}[/red]\n")
+
+
+@main.command()
+def tui():
+    """Launch the interactive TUI (Terminal User Interface)."""
+    from frfr.tui.app import run_tui
+    run_tui()
 
 
 @main.command()

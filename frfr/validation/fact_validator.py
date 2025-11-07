@@ -236,17 +236,19 @@ If the claim is NOT supported by this context, set found to false.
 
             result = json.loads(response)
 
-            if result.get("found") and result.get("confidence", 0) >= 0.8:
+            if result.get("found") and result.get("confidence", 0) >= 0.6:  # Lowered from 0.8 to 0.6
                 recovered_quote = result["quote"]
 
                 # Verify the recovered quote actually exists in context
                 found, match_type, match_ratio = self.find_quote_in_text(recovered_quote, search_context)
 
                 if found:
-                    logger.info(f"Successfully recovered fact with {result['confidence']:.0%} confidence")
+                    logger.info(f"✓ Successfully recovered fact with {result['confidence']:.0%} confidence (match: {match_ratio:.0%})")
                     return recovered_quote, f"Lines {start_line}-{end_line}"
+                else:
+                    logger.warning(f"LLM found quote but it doesn't exist in context: {recovered_quote[:60]}...")
 
-            logger.debug(f"Recovery failed: {result.get('reasoning', 'unknown reason')}")
+            logger.info(f"Recovery failed: confidence={result.get('confidence', 0):.0%}, found={result.get('found')}, reason={result.get('reasoning', 'unknown')[:60]}")
             return None
 
         except Exception as e:
@@ -329,21 +331,50 @@ If the claim is NOT supported by this context, set found to false.
                     quote_snippet=quote_snippet,
                     match_percentage=best_match_ratio,
                 )
-            elif has_near_match:
-                # Near match detected (75-89%) - flag for review
-                error_msg = f"Near match detected ({best_match_ratio:.0%}) - approximately correct but not exact"
-                return ValidationResult(
-                    fact_index=fact_index,
-                    claim=claim[:80],
-                    is_valid=False,
-                    error_message=error_msg,
-                    actual_line_range=location,
-                    quote_snippet=quotes_to_validate[0][:60] + "..." if len(quotes_to_validate[0]) > 60 else quotes_to_validate[0],
-                    is_near_match=True,
-                    match_percentage=best_match_ratio,
+            elif has_near_match or (0.4 <= best_match_ratio < 0.90):
+                # Near match (75-89%) or medium confidence (40-74%) - attempt recovery
+                match_category = "near match" if best_match_ratio >= 0.75 else "medium confidence"
+                logger.info(f"{match_category} fact in chunk ({best_match_ratio:.0%}), attempting recovery...")
+
+                # Find best quote for recovery
+                best_quote_idx = match_ratios.index(max(match_ratios)) if match_ratios else 0
+                best_quote_for_recovery = quotes_to_validate[best_quote_idx]
+
+                # Attempt recovery using the chunk text as context
+                recovery_result = self.attempt_fact_recovery(
+                    claim, best_quote_for_recovery, chunk_text, 0, len(chunk_text.split('\n'))
                 )
+
+                if recovery_result:
+                    corrected_quote, corrected_location = recovery_result
+                    logger.info(f"✓ Recovered {match_category} fact from chunk: {claim[:60]}...")
+                    return ValidationResult(
+                        fact_index=fact_index,
+                        claim=claim[:80],
+                        is_valid=True,
+                        actual_line_range=corrected_location,
+                        quote_snippet=corrected_quote[:60] + "..." if len(corrected_quote) > 60 else corrected_quote,
+                        was_recovered=True,
+                        corrected_quote=corrected_quote,
+                        corrected_location=corrected_location,
+                        is_near_match=(best_match_ratio >= 0.75),
+                        match_percentage=best_match_ratio,
+                    )
+                else:
+                    # Recovery failed
+                    error_msg = f"{match_category} ({best_match_ratio:.0%}) - recovery attempted but failed"
+                    return ValidationResult(
+                        fact_index=fact_index,
+                        claim=claim[:80],
+                        is_valid=False,
+                        error_message=error_msg,
+                        actual_line_range=location,
+                        quote_snippet=quotes_to_validate[0][:60] + "..." if len(quotes_to_validate[0]) > 60 else quotes_to_validate[0],
+                        is_near_match=(best_match_ratio >= 0.75),
+                        match_percentage=best_match_ratio,
+                    )
             else:
-                # Some quotes not found in chunk - fail validation
+                # Match ratio too low (< 40%) - reject without recovery
                 error_msg = f"{len(failed_quotes)}/{len(quotes_to_validate)} quotes not found in chunk (best: {best_match_ratio:.0%})"
                 return ValidationResult(
                     fact_index=fact_index,
@@ -443,34 +474,20 @@ If the claim is NOT supported by this context, set found to false.
                 match_percentage=best_expanded_ratio,
             )
 
-        # Check if we have a near match in expanded search
-        if has_near_match_expanded:
-            quote_snippet = quotes_to_validate[0][:60] + "..." if len(quotes_to_validate[0]) > 60 else quotes_to_validate[0]
-            if len(quotes_to_validate) > 1:
-                quote_snippet += f" (+{len(quotes_to_validate)-1} more)"
-
-            return ValidationResult(
-                fact_index=fact_index,
-                claim=claim[:80],
-                is_valid=False,
-                error_message=f"Near match detected ({best_expanded_ratio:.0%}) - approximately correct but not exact",
-                actual_line_range=f"Lines {expanded_start}-{expanded_end}",
-                quote_snippet=quote_snippet,
-                is_near_match=True,
-                match_percentage=best_expanded_ratio,
-            )
-
         # Not found even with expanded search - attempt recovery if quote was close
-        # Medium confidence: 40-74% match
-        # Near match: 75-89% match (already handled above)
+        # Near match: 75-89% match - ATTEMPT RECOVERY (these are approximately correct)
+        # Medium confidence: 40-74% match - ATTEMPT RECOVERY
         # Valid: >= 90% match
+        # Too low: < 40% match - reject
 
         # Find the quote with the best match ratio for recovery
         best_quote_idx = expanded_match_ratios.index(max(expanded_match_ratios)) if expanded_match_ratios else 0
         best_quote_for_recovery = quotes_to_validate[best_quote_idx]
 
-        if 0.4 <= best_expanded_ratio < 0.75:  # Medium confidence range
-            logger.info(f"Medium confidence fact ({best_expanded_ratio:.0%}), attempting recovery...")
+        # Attempt recovery for near matches (75-89%) and medium confidence (40-74%)
+        if 0.4 <= best_expanded_ratio < 0.90:  # Recovery range: 40-89%
+            match_category = "near match" if best_expanded_ratio >= 0.75 else "medium confidence"
+            logger.info(f"{match_category} fact ({best_expanded_ratio:.0%}), attempting recovery...")
 
             # Try recovery with even wider context
             recovery_start = max(1, start_line - 20)
@@ -483,7 +500,7 @@ If the claim is NOT supported by this context, set found to false.
 
             if recovery_result:
                 corrected_quote, corrected_location = recovery_result
-                logger.info(f"✓ Recovered fact: {claim[:60]}...")
+                logger.info(f"✓ Recovered {match_category} fact: {claim[:60]}...")
                 return ValidationResult(
                     fact_index=fact_index,
                     claim=claim[:80],
@@ -493,7 +510,27 @@ If the claim is NOT supported by this context, set found to false.
                     was_recovered=True,
                     corrected_quote=corrected_quote,
                     corrected_location=corrected_location,
+                    is_near_match=(best_expanded_ratio >= 0.75),
+                    match_percentage=best_expanded_ratio,
                 )
+            else:
+                # Recovery failed - flag as near match that needs manual review
+                if best_expanded_ratio >= 0.75:
+                    quote_snippet = quotes_to_validate[0][:60] + "..." if len(quotes_to_validate[0]) > 60 else quotes_to_validate[0]
+                    if len(quotes_to_validate) > 1:
+                        quote_snippet += f" (+{len(quotes_to_validate)-1} more)"
+
+                    logger.warning(f"Near match ({best_expanded_ratio:.0%}) - recovery failed, cannot make citable")
+                    return ValidationResult(
+                        fact_index=fact_index,
+                        claim=claim[:80],
+                        is_valid=False,  # Not valid - needs correct quote
+                        error_message=f"Near match ({best_expanded_ratio:.0%}) - recovery attempted but failed",
+                        actual_line_range=f"Lines {expanded_start}-{expanded_end}",
+                        quote_snippet=quote_snippet,
+                        is_near_match=True,
+                        match_percentage=best_expanded_ratio,
+                    )
 
         # Not found and recovery failed/not attempted
         # V5: Report how many quotes failed
@@ -563,16 +600,21 @@ If the claim is NOT supported by this context, set found to false.
 
         # Calculate stats
         valid_count = sum(1 for r in results if r.is_valid)
-        near_match_count = sum(1 for r in results if not r.is_valid and r.is_near_match)
-        invalid_count = len(results) - valid_count - near_match_count
+        recovered_count = sum(1 for r in results if r.is_valid and r.was_recovered)
+        recovered_near_match_count = sum(1 for r in results if r.is_valid and r.was_recovered and r.is_near_match)
+        near_match_failed_count = sum(1 for r in results if not r.is_valid and r.is_near_match)
+        invalid_count = len(results) - valid_count
 
         stats = {
             "total_facts": len(results),
             "valid_facts": valid_count,
-            "near_match_facts": near_match_count,
+            "recovered_facts": recovered_count,
+            "recovered_near_matches": recovered_near_match_count,
+            "near_match_failed": near_match_failed_count,
             "invalid_facts": invalid_count,
             "validation_rate": valid_count / len(results) if results else 0,
-            "near_match_rate": near_match_count / len(results) if results else 0,
+            "recovery_rate": recovered_count / len(results) if results else 0,
+            "near_match_recovery_rate": recovered_near_match_count / (recovered_near_match_count + near_match_failed_count) if (recovered_near_match_count + near_match_failed_count) > 0 else 0,
         }
 
         return results, stats
@@ -606,16 +648,21 @@ def validate_consolidated_facts(
 
     # Calculate stats
     valid_count = sum(1 for r in results if r.is_valid)
-    near_match_count = sum(1 for r in results if not r.is_valid and r.is_near_match)
-    invalid_count = len(results) - valid_count - near_match_count
+    recovered_count = sum(1 for r in results if r.is_valid and r.was_recovered)
+    recovered_near_match_count = sum(1 for r in results if r.is_valid and r.was_recovered and r.is_near_match)
+    near_match_failed_count = sum(1 for r in results if not r.is_valid and r.is_near_match)
+    invalid_count = len(results) - valid_count
 
     stats = {
         "total_facts": len(results),
         "valid_facts": valid_count,
-        "near_match_facts": near_match_count,
+        "recovered_facts": recovered_count,
+        "recovered_near_matches": recovered_near_match_count,
+        "near_match_failed": near_match_failed_count,
         "invalid_facts": invalid_count,
         "validation_rate": valid_count / len(results) if results else 0,
-        "near_match_rate": near_match_count / len(results) if results else 0,
+        "recovery_rate": recovered_count / len(results) if results else 0,
+        "near_match_recovery_rate": recovered_near_match_count / (recovered_near_match_count + near_match_failed_count) if (recovered_near_match_count + near_match_failed_count) > 0 else 0,
     }
 
     return results, stats

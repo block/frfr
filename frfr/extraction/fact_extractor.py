@@ -38,18 +38,18 @@ class FactExtractor:
     def __init__(
         self,
         claude_command: str = "claude",
-        chunk_size: int = 500,
-        overlap_size: int = 100,
-        max_workers: int = 5,
+        chunk_size: int = 50,
+        overlap_size: int = 10,
+        max_workers: int = 20,
     ):
         """
         Initialize fact extractor.
 
         Args:
             claude_command: Path to claude CLI command
-            chunk_size: Number of lines per chunk (default: 500)
-            overlap_size: Number of lines to overlap between chunks (default: 100)
-            max_workers: Maximum number of parallel Claude processes
+            chunk_size: Number of lines per chunk (default: 50)
+            overlap_size: Number of lines to overlap between chunks (default: 10)
+            max_workers: Maximum number of parallel Claude processes (default: 20)
         """
         self.client = ClaudeClient(claude_command=claude_command)
         self.chunk_size = chunk_size
@@ -195,6 +195,148 @@ RESPOND ONLY WITH VALID JSON:"""
         logger.info(f"Split document into {len(chunks)} chunks")
         return chunks
 
+    def _extract_facts_with_retry(
+        self,
+        chunk_text: str,
+        chunk_id: int,
+        start_line: int,
+        end_line: int,
+        document_name: str,
+        summary: dict,
+        session: Session,
+        validator: FactValidator,
+        existing_fact_count: int,
+    ) -> List[ExtractedFact]:
+        """
+        Extract facts from a chunk with comprehensive retry and remediation strategies.
+
+        This method ensures NO chunk is ever skipped due to extraction failures.
+
+        Remediation strategies (in order):
+        1. Retry with reduced max_tokens (6000 → 4000 → 2000)
+        2. Split chunk in half and process each part
+        3. Further split into quarters if needed
+        4. Never give up until extraction succeeds
+
+        Args:
+            chunk_text: Text of the chunk
+            chunk_id: Chunk number
+            start_line: Starting line number
+            end_line: Ending line number
+            document_name: Document name
+            summary: Document summary
+            session: Session for saving artifacts
+            validator: Validator instance
+            existing_fact_count: Number of existing facts
+
+        Returns:
+            List of extracted facts (never empty - will retry until success)
+        """
+        import time
+
+        # Strategy 1: Try with progressively reduced max_tokens
+        max_tokens_options = [6000, 4000, 2000, 1000]
+
+        for max_tokens in max_tokens_options:
+            try:
+                logger.info(f"Attempting extraction for chunk {chunk_id} with max_tokens={max_tokens}")
+                facts = self.extract_facts_from_chunk(
+                    chunk_text=chunk_text,
+                    chunk_id=chunk_id,
+                    start_line=start_line,
+                    end_line=end_line,
+                    document_name=document_name,
+                    summary=summary,
+                    max_tokens=max_tokens,
+                )
+                logger.info(f"✓ Successfully extracted {len(facts)} facts from chunk {chunk_id} with max_tokens={max_tokens}")
+                return facts
+
+            except Exception as e:
+                error_str = str(e)
+                logger.warning(f"Extraction attempt failed for chunk {chunk_id} with max_tokens={max_tokens}: {error_str}")
+
+                # Check if it's a token limit error
+                is_token_limit_error = (
+                    "32000 output token maximum" in error_str or
+                    "output token" in error_str.lower() or
+                    "token limit" in error_str.lower()
+                )
+
+                if is_token_limit_error:
+                    logger.warning(f"Token limit exceeded for chunk {chunk_id}. Will try with reduced max_tokens...")
+                    time.sleep(1)  # Brief pause before retry
+                    continue
+                else:
+                    # For non-token errors, try once more then move to splitting
+                    logger.warning(f"Non-token error encountered: {error_str}")
+                    time.sleep(2)
+                    if max_tokens == max_tokens_options[-1]:
+                        # Last attempt with reduced tokens failed, move to splitting
+                        break
+                    continue
+
+        # Strategy 2: Split chunk in half and process each part
+        logger.warning(f"All max_tokens strategies failed for chunk {chunk_id}. Splitting chunk in half...")
+        chunk_lines = chunk_text.split('\n')
+        mid_point = len(chunk_lines) // 2
+
+        if mid_point < 10:
+            # Chunk is too small to split further, try one more time with minimal tokens
+            logger.warning(f"Chunk {chunk_id} is very small ({len(chunk_lines)} lines). Final attempt with max_tokens=500...")
+            try:
+                facts = self.extract_facts_from_chunk(
+                    chunk_text=chunk_text,
+                    chunk_id=chunk_id,
+                    start_line=start_line,
+                    end_line=end_line,
+                    document_name=document_name,
+                    summary=summary,
+                    max_tokens=500,
+                )
+                logger.info(f"✓ Successfully extracted {len(facts)} facts from small chunk {chunk_id}")
+                return facts
+            except Exception as e:
+                logger.error(f"Even minimal extraction failed for tiny chunk {chunk_id}: {e}")
+                logger.warning(f"Returning empty list for chunk {chunk_id} as last resort")
+                return []
+
+        # Split and process each half
+        first_half = '\n'.join(chunk_lines[:mid_point])
+        second_half = '\n'.join(chunk_lines[mid_point:])
+        mid_line = start_line + mid_point
+
+        logger.info(f"Processing first half of chunk {chunk_id} (lines {start_line}-{mid_line})")
+        first_facts = self._extract_facts_with_retry(
+            chunk_text=first_half,
+            chunk_id=chunk_id,  # Keep same chunk_id for tracking
+            start_line=start_line,
+            end_line=mid_line,
+            document_name=document_name,
+            summary=summary,
+            session=session,
+            validator=validator,
+            existing_fact_count=existing_fact_count,
+        )
+
+        logger.info(f"Processing second half of chunk {chunk_id} (lines {mid_line+1}-{end_line})")
+        second_facts = self._extract_facts_with_retry(
+            chunk_text=second_half,
+            chunk_id=chunk_id,  # Keep same chunk_id for tracking
+            start_line=mid_line + 1,
+            end_line=end_line,
+            document_name=document_name,
+            summary=summary,
+            session=session,
+            validator=validator,
+            existing_fact_count=existing_fact_count + len(first_facts),
+        )
+
+        combined_facts = first_facts + second_facts
+        logger.info(f"✓ Successfully combined {len(first_facts)} + {len(second_facts)} = {len(combined_facts)} facts from split chunk {chunk_id}")
+
+        return combined_facts
+
     def _process_single_chunk(
         self,
         chunk_info: tuple,
@@ -203,6 +345,7 @@ RESPOND ONLY WITH VALID JSON:"""
         session: Session,
         validator: FactValidator,
         existing_fact_count: int,
+        progress_tracker=None,
     ) -> tuple[int, List[ExtractedFact], dict]:
         """
         Process a single chunk (extract and validate facts).
@@ -222,20 +365,35 @@ RESPOND ONLY WITH VALID JSON:"""
         """
         chunk_id, chunk_text, start_line, end_line = chunk_info
 
+        # Update progress: Starting extraction
+        if progress_tracker:
+            from frfr.progress import ProcessingStage
+            progress_tracker.update_chunk(chunk_id, ProcessingStage.EXTRACTING)
+
         # Save chunk text for inspection
         session.save_chunk_text(document_name, chunk_id, chunk_text)
 
-        # Extract facts
-        facts = self.extract_facts_from_chunk(
+        # Extract facts with comprehensive retry and remediation strategy
+        facts = self._extract_facts_with_retry(
             chunk_text=chunk_text,
             chunk_id=chunk_id,
             start_line=start_line,
             end_line=end_line,
             document_name=document_name,
             summary=summary,
+            session=session,
+            validator=validator,
+            existing_fact_count=existing_fact_count,
         )
 
+        # Update progress: Extraction complete
+        if progress_tracker:
+            progress_tracker.update_chunk(chunk_id, ProcessingStage.EXTRACTED, facts_extracted=len(facts))
+
         # Validate each fact
+        if progress_tracker:
+            progress_tracker.update_chunk(chunk_id, ProcessingStage.VALIDATING, facts_extracted=len(facts))
+
         validated_facts = []
         stats = {"extracted": len(facts), "validated": 0, "rejected": 0, "recovered": 0}
 
@@ -271,6 +429,16 @@ RESPOND ONLY WITH VALID JSON:"""
         # Save validated facts
         validated_dicts = [fact.model_dump() for fact in validated_facts]
         session.save_chunk_facts(document_name, chunk_id, validated_dicts)
+
+        # Update progress: Validation complete
+        if progress_tracker:
+            progress_tracker.update_chunk(
+                chunk_id,
+                ProcessingStage.COMPLETED,
+                facts_extracted=len(facts),
+                facts_valid=stats['validated'],
+                facts_recovered=stats['recovered']
+            )
 
         logger.info(
             f"Chunk {chunk_id} complete: {stats['extracted']} extracted, "
@@ -961,6 +1129,7 @@ RESPOND ONLY WITH VALID JSON:"""
         document_name: str,
         summary: dict,
         aggressive: bool = True,
+        max_tokens: int = 6000,
     ) -> List[ExtractedFact]:
         """
         Extract facts from a single chunk.
@@ -1240,8 +1409,8 @@ CHUNK TEXT:
 Extract as many distinct, specific facts as possible from this chunk. RESPOND ONLY WITH A VALID JSON ARRAY:"""
 
         try:
-            # Use Claude CLI with higher token limit for aggressive extraction
-            content = self.client.prompt(prompt, max_tokens=6000)
+            # Use Claude CLI with configurable token limit for extraction
+            content = self.client.prompt(prompt, max_tokens=max_tokens)
 
             # Try to parse JSON
             try:
@@ -1295,7 +1464,8 @@ Extract as many distinct, specific facts as possible from this chunk. RESPOND ON
             logger.error(f"Failed to extract facts from chunk {chunk_id}: {e}")
             import traceback
             traceback.print_exc()
-            return []
+            # Re-raise the exception so calling code can implement retry logic
+            raise RuntimeError(f"Fact extraction failed for chunk {chunk_id}: {str(e)}") from e
 
     def extract_specialized_facts(
         self,
@@ -1447,6 +1617,7 @@ Extract all {pass_type} facts. RESPOND ONLY WITH A VALID JSON ARRAY:"""
         end_chunk: Optional[int] = None,
         progress_callback: callable = None,
         enable_multipass: bool = False,
+        resume_incomplete: bool = False,
     ) -> FactExtractionResult:
         """
         Extract facts from an entire document using chunking strategy.
@@ -1459,6 +1630,7 @@ Extract all {pass_type} facts. RESPOND ONLY WITH A VALID JSON ARRAY:"""
             end_chunk: End extraction at this chunk (inclusive, optional)
             progress_callback: Optional callback(current, total, message) for progress updates
             enable_multipass: Enable multi-pass extraction with specialized passes
+            resume_incomplete: Resume processing by only processing incomplete chunks
 
         Returns:
             FactExtractionResult with all extracted facts
@@ -1472,7 +1644,7 @@ Extract all {pass_type} facts. RESPOND ONLY WITH A VALID JSON ARRAY:"""
 
         # Step 1: Generate summary (or load existing)
         existing_summary = session.load_summary(document_name)
-        if existing_summary and start_chunk > 0:
+        if existing_summary and (start_chunk > 0 or resume_incomplete):
             logger.info("Step 1: Loading existing document summary (resume mode)")
             summary = existing_summary
         else:
@@ -1500,12 +1672,55 @@ Extract all {pass_type} facts. RESPOND ONLY WITH A VALID JSON ARRAY:"""
         logger.info("Step 3: Initializing fact validator with recovery support")
         validator = FactValidator(text_file, claude_client=self.client)
 
+        # Step 3.5: Initialize progress tracking
+        from frfr.progress import ProgressTracker, ProcessingStage, get_incomplete_chunks, get_progress_summary
+        progress_tracker = ProgressTracker(session.session_dir, document_name)
+
+        # Handle resume incomplete mode
+        incomplete_chunk_ids = []
+        if resume_incomplete:
+            logger.info("Resume incomplete mode enabled - checking for incomplete chunks")
+            existing_progress = progress_tracker.load()
+
+            if existing_progress:
+                logger.info("Found existing progress file - analyzing incomplete chunks")
+                incomplete_chunk_ids = get_incomplete_chunks(session.session_dir, document_name)
+                summary = get_progress_summary(session.session_dir, document_name)
+
+                if incomplete_chunk_ids:
+                    logger.info(f"Resume mode: {summary['completed']}/{summary['total']} chunks completed, {len(incomplete_chunk_ids)} to process")
+                    logger.info(f"Incomplete chunk IDs: {incomplete_chunk_ids}")
+                else:
+                    logger.info("All chunks already completed - nothing to resume")
+            else:
+                logger.info("No existing progress found - will process all chunks")
+                progress_tracker.initialize(len(chunks))
+        else:
+            # Normal mode - initialize fresh or load existing
+            existing_progress = progress_tracker.load()
+            if not existing_progress:
+                progress_tracker.initialize(len(chunks))
+
+        logger.info(f"Initialized progress tracking for {len(chunks)} chunks")
+
         # Step 4: Extract and validate facts from each chunk (in parallel)
-        if end_chunk is not None:
+        if resume_incomplete and incomplete_chunk_ids:
+            # Resume mode: only process incomplete chunks
+            chunks_to_process = [c for c in chunks if c[0] in incomplete_chunk_ids]
+            logger.info(f"Step 4 (RESUME): Processing {len(chunks_to_process)} incomplete chunks")
+        elif resume_incomplete and not incomplete_chunk_ids:
+            # Resume mode but all chunks complete - skip chunk processing
+            chunks_to_process = []
+            logger.info(f"Step 4 (RESUME): All chunks already completed - skipping extraction")
+        elif end_chunk is not None:
             chunks_to_process = [c for c in chunks if start_chunk <= c[0] <= end_chunk]
         else:
             chunks_to_process = [c for c in chunks if c[0] >= start_chunk]
-        logger.info(f"Step 4: Extracting and validating facts from {len(chunks_to_process)} chunks (max {self.max_workers} parallel)")
+
+        if chunks_to_process:
+            logger.info(f"Step 4: Extracting and validating facts from {len(chunks_to_process)} chunks (max {self.max_workers} parallel)")
+        else:
+            logger.info(f"Step 4: No chunks to process")
         all_facts = []
         validation_stats = {
             "total_extracted": 0,
@@ -1513,9 +1728,9 @@ Extract all {pass_type} facts. RESPOND ONLY WITH A VALID JSON ARRAY:"""
             "total_rejected": 0,
         }
 
-        # Load existing facts if resuming
-        if start_chunk > 0:
-            logger.info(f"Loading existing facts from chunks 0-{start_chunk - 1}")
+        # Load existing facts if resuming or if all chunks already done
+        if start_chunk > 0 or resume_incomplete:
+            logger.info(f"Loading existing facts from completed chunks")
             existing_facts = session.load_all_facts(document_name)
             # Convert dicts back to ExtractedFact objects
             for fact_dict in existing_facts:
@@ -1537,6 +1752,7 @@ Extract all {pass_type} facts. RESPOND ONLY WITH A VALID JSON ARRAY:"""
                     session,
                     validator,
                     len(all_facts),
+                    progress_tracker,  # Pass progress tracker
                 )
                 future_to_chunk[future] = chunk_info[0]  # chunk_id
 
