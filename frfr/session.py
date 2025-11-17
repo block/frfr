@@ -334,6 +334,10 @@ class Session:
         if document_name is None:
             document_name = pdf_path.stem
 
+        # Check if document already exists in registry
+        registry = self.metadata.setdefault("document_registry", {})
+        is_new_document = document_name not in registry
+
         # Create symlink in inputs directory
         symlink_path = self.inputs_dir / pdf_path.name
         if not symlink_path.exists():
@@ -343,23 +347,22 @@ class Session:
         text_file = self.outputs_dir / f"{document_name}_text.txt"
         facts_file = self.facts_dir / f"{document_name}_facts.json"
 
-        # Register document
-        registry = self.metadata.setdefault("document_registry", {})
+        # Register document (or update existing)
         registry[document_name] = {
             "original_pdf_path": str(pdf_path),
             "symlink_path": str(symlink_path),
             "text_file": str(text_file),
             "facts_file": str(facts_file),
             "status": "pending",
-            "added_at": datetime.now().isoformat(),
+            "added_at": registry.get(document_name, {}).get("added_at", datetime.now().isoformat()),
         }
         self._save_metadata()
 
-        # Regenerate session name based on all documents
+        # Only regenerate session name if this is a NEW document
         result = dict(registry[document_name])
         result["session_renamed"] = False
 
-        if auto_rename:
+        if auto_rename and is_new_document:
             new_session_id = self.regenerate_session_name(use_llm=True)
             if new_session_id:
                 result["session_renamed"] = True

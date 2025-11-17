@@ -1304,18 +1304,21 @@ GENERAL RULES:
 - Prioritize specific, detailed facts over generic statements
 - When in doubt, extract it - more facts is better than fewer
 
+**BALANCING ATOMICITY WITH COMPREHENSIVENESS**:
+While extracting specific details is important, PREFER creating comprehensive facts that combine related information:
+- ✅ GOOD: "Database runs PostgreSQL 14 with daily backups at 2 AM UTC" (combines tech + process)
+- ❌ TOO ATOMIC: "Database runs PostgreSQL 14" + "Database has daily backups" + "Backups run at 2 AM UTC"
+- ✅ GOOD: "Penetration testing performed quarterly by Acme Security with 30-day remediation SLA" (combines frequency + vendor + SLA)
+- ❌ TOO ATOMIC: "Penetration testing is quarterly" + "Acme Security performs testing" + "Findings remediated in 30 days"
+
+Look for opportunities to create comprehensive claims with multiple supporting quotes rather than fragmenting into overly atomic facts.
+
 **V5: EVIDENCE REQUIREMENTS** (CRITICAL):
 
 Each fact must have supporting evidence. You have TWO options:
 
-**Option 1: Single Evidence (most common)**
-Use when all evidence is in one place:
-```
-"evidence_quote": "Exact WORD-FOR-WORD text from chunk"
-```
-
-**Option 2: Multiple Evidence (V5 - use when appropriate)**
-Use when a fact combines information from different locations:
+**Option 1: Multiple Evidence (V5 - recommended for comprehensive facts)**
+Use when a fact mentions multiple aspects or combines information from different locations:
 ```
 "evidence_quotes": [
   {{
@@ -1331,11 +1334,17 @@ Use when a fact combines information from different locations:
 ]
 ```
 
-**When to use multiple quotes:**
-- Fact mentions frequency from one location AND implementation details from another
-- Combining policy statement with implementation evidence
-- Multiple test results supporting the same conclusion
-- Technology mentioned in one place, configuration in another
+**Examples of when multiple quotes work well:**
+- Fact mentions WHO does something AND WHEN/HOW they do it
+- Technology/system mentioned in one location, configuration details in another
+- Policy statement combined with implementation evidence
+- Multiple test results, measurements, or samples supporting the same claim
+
+**Option 2: Single Evidence**
+Use when all evidence is in one contiguous location:
+```
+"evidence_quote": "Exact WORD-FOR-WORD text from chunk"
+```
 
 **Quote rules (apply to both formats):**
 - Copy text WORD-FOR-WORD from the chunk
@@ -1361,45 +1370,102 @@ WHAT TO SKIP:
 RESPOND WITH VALID JSON ARRAY:
 [
   {{
-    "claim": "Clear, specific assertion (be granular - separate claims into individual facts)",
+    "claim": "Database runs PostgreSQL 14 with automated daily backups at 2 AM UTC",
     "source_doc": "{document_name}",
-    "source_location": "Lines X-Y (overall range)",
-    "evidence_quote": "Exact text from chunk (use for single evidence)",
-    "confidence": 0.95,
-    "fact_type": "technical_control",
-    "control_family": "encryption",
-    "specificity_score": 0.9,
-    "entities": ["AWS", "AES-256"],
-    "quantitative_values": ["256-bit"],
-    "process_details": {{"who": "IT team", "when": "daily", "how": "automated script"}},
-    "section_context": "{section_context}",
-    "related_control_ids": ["CC6.1"]
-  }},
-  {{
-    "claim": "V5 example with multiple evidence quotes",
-    "source_doc": "{document_name}",
-    "source_location": "Lines X-Z (overall range)",
+    "source_location": "Lines 15-23 (overall range)",
     "evidence_quotes": [
       {{
-        "quote": "First exact quote from chunk",
-        "source_location": "Lines X-Y",
-        "relevance": "Frequency"
+        "quote": "Production database runs PostgreSQL version 14.2 on AWS RDS",
+        "source_location": "Lines 15-16",
+        "relevance": "Technology and version"
       }},
       {{
-        "quote": "Second exact quote from chunk",
-        "source_location": "Lines Z-W",
-        "relevance": "Who performs"
+        "quote": "Automated backups occur daily at 2:00 AM UTC with 30-day retention",
+        "source_location": "Lines 22-23",
+        "relevance": "Backup schedule and retention"
+      }}
+    ],
+    "confidence": 0.95,
+    "fact_type": "technical_control",
+    "control_family": "backup_recovery",
+    "specificity_score": 0.95,
+    "entities": ["PostgreSQL", "AWS RDS"],
+    "quantitative_values": ["14.2", "2:00 AM UTC", "30-day"],
+    "process_details": {{"who": "automated system", "when": "daily at 2 AM UTC", "how": "AWS RDS automated backups"}},
+    "section_context": "{section_context}",
+    "related_control_ids": ["CC5.2"]
+  }},
+  {{
+    "claim": "Penetration testing performed quarterly by Acme Security with findings remediated within 30 days",
+    "source_doc": "{document_name}",
+    "source_location": "Lines 45-52 (overall range)",
+    "evidence_quotes": [
+      {{
+        "quote": "External penetration tests are conducted quarterly by Acme Security, Inc.",
+        "source_location": "Lines 45-46",
+        "relevance": "Frequency and vendor"
+      }},
+      {{
+        "quote": "All critical and high-severity findings are remediated within 30 days of report delivery",
+        "source_location": "Lines 51-52",
+        "relevance": "Remediation SLA"
       }}
     ],
     "confidence": 0.95,
     "fact_type": "process",
-    "control_family": "monitoring",
+    "control_family": "vulnerability_management",
     "specificity_score": 0.9,
     "entities": ["Acme Security"],
-    "quantitative_values": ["quarterly"],
-    "process_details": {{"who": "Acme Security", "when": "quarterly", "how": "third-party assessment"}},
+    "quantitative_values": ["quarterly", "30 days"],
+    "process_details": {{"who": "Acme Security", "when": "quarterly", "how": "external penetration test"}},
     "section_context": "{section_context}",
-    "related_control_ids": []
+    "related_control_ids": ["CC7.2"]
+  }},
+  {{
+    "claim": "Application servers achieved 99.97%, 99.98%, and 99.96% uptime across three monthly samples",
+    "source_doc": "{document_name}",
+    "source_location": "Lines 78-85 (overall range)",
+    "evidence_quotes": [
+      {{
+        "quote": "January uptime: 99.97% (43 minutes downtime)",
+        "source_location": "Lines 80-80",
+        "relevance": "January measurement"
+      }},
+      {{
+        "quote": "February uptime: 99.98% (29 minutes downtime)",
+        "source_location": "Lines 82-82",
+        "relevance": "February measurement"
+      }},
+      {{
+        "quote": "March uptime: 99.96% (58 minutes downtime)",
+        "source_location": "Lines 84-84",
+        "relevance": "March measurement"
+      }}
+    ],
+    "confidence": 0.95,
+    "fact_type": "metric",
+    "control_family": "availability",
+    "specificity_score": 0.95,
+    "entities": ["application servers"],
+    "quantitative_values": ["99.97%", "99.98%", "99.96%", "43 minutes", "29 minutes", "58 minutes"],
+    "process_details": {{"who": "monitoring system", "when": "monthly", "how": "automated measurement"}},
+    "section_context": "{section_context}",
+    "related_control_ids": ["CC9.1"]
+  }},
+  {{
+    "claim": "TLS 1.3 encryption enforced for all API endpoints",
+    "source_doc": "{document_name}",
+    "source_location": "Lines 102-103 (overall range)",
+    "evidence_quote": "All API endpoints enforce TLS 1.3 encryption with cipher suite TLS_AES_256_GCM_SHA384",
+    "confidence": 0.95,
+    "fact_type": "technical_control",
+    "control_family": "encryption",
+    "specificity_score": 0.9,
+    "entities": ["TLS", "API"],
+    "quantitative_values": ["1.3", "256"],
+    "process_details": {{}},
+    "section_context": "{section_context}",
+    "related_control_ids": ["CC6.7"]
   }}
 ]
 

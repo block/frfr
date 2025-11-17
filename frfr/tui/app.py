@@ -73,7 +73,7 @@ class FrfrApp(App):
     }
 
     #left-panel {
-        width: 40%;
+        width: 25%;
         border-right: solid $primary;
         padding: 1;
     }

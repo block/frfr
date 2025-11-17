@@ -67,6 +67,11 @@ class SessionDetailScreen(Screen):
         table.zebra_stripes = True
         table.focus()
 
+    def on_screen_resume(self) -> None:
+        """Called when returning to this screen from another screen."""
+        # Refresh session data when returning from processing/recovery screens
+        self.action_refresh()
+
     def _format_session_info(self) -> str:
         """Format session information for display."""
         lines = []
@@ -199,9 +204,6 @@ class SessionDetailScreen(Screen):
                     is_new_session=False
                 ))
 
-                # Refresh the session when we return
-                self.set_timer(0.5, self.action_refresh)
-
         # Show the file selection dialog with callback
         self.app.push_screen(
             AddDocumentScreen(self.session_info.session_id),
@@ -260,9 +262,6 @@ class SessionDetailScreen(Screen):
                         resume_incomplete=resume_mode
                     ))
 
-                    # Refresh the session when we return
-                    self.set_timer(0.5, self.action_refresh)
-
                 # Show the resume dialog
                 self.app.push_screen(
                     ResumeDialog(
@@ -284,9 +283,6 @@ class SessionDetailScreen(Screen):
                     is_new_session=False,
                     resume_incomplete=True  # Resume mode but with 0 incomplete chunks
                 ))
-
-                # Refresh the session when we return
-                self.set_timer(0.5, self.action_refresh)
             else:
                 # No progress file - normal reprocess
                 self.app.notify(f"Reprocessing {doc_name}...", severity="information")
@@ -297,9 +293,6 @@ class SessionDetailScreen(Screen):
                     session_id=self.session_info.session_id,
                     is_new_session=False
                 ))
-
-                # Refresh the session when we return
-                self.set_timer(0.5, self.action_refresh)
 
         except (IndexError, KeyError) as e:
             self.app.notify(f"Could not find document: {str(e)}", severity="error")
@@ -330,9 +323,6 @@ class SessionDetailScreen(Screen):
             session_id=self.session_info.session_id,
             document_name=document_name
         ))
-
-        # Refresh the session when we return
-        self.set_timer(0.5, self.action_refresh)
 
     def action_refresh(self) -> None:
         """Refresh the session data."""
