@@ -59,6 +59,8 @@ class QueryScreen(Screen):
         self.facts_file = facts_file
         self.query_history: List[str] = []
         self.history_index = -1
+        self.conversation_history: List[Dict[str, str]] = []  # Store Q&A pairs for context
+        self.current_query: str = ""  # Track current query for conversation history
 
     def compose(self) -> ComposeResult:
         """Compose the query interface layout."""
@@ -140,6 +142,9 @@ class QueryScreen(Screen):
 
     def run_query_worker(self, query: str) -> None:
         """Run query in a background worker."""
+        # Store current query for conversation history
+        self.current_query = query
+
         status_widget = self.query_one("#query-status", Static)
         status_widget.update("[bold cyan]⏳ Starting query...[/bold cyan]")
 
@@ -153,6 +158,47 @@ class QueryScreen(Screen):
 
         # Start worker to run query
         self.run_worker(self.execute_query(query), exclusive=True)
+
+    def _build_conversation_context(self, max_tokens: int = 20000) -> str:
+        """Build conversation history context using sliding window.
+
+        Args:
+            max_tokens: Maximum token budget for conversation history (default 20k)
+
+        Returns:
+            Formatted conversation history string, or empty string if no history
+        """
+        if not self.conversation_history:
+            return ""
+
+        # Estimate tokens: rough approximation of 1 token per 4 characters
+        def estimate_tokens(text: str) -> int:
+            return len(text) // 4
+
+        # Build context from most recent exchanges that fit in budget
+        context_parts = []
+        total_tokens = 0
+
+        # Iterate backwards through history to prioritize recent exchanges
+        for entry in reversed(self.conversation_history):
+            question = entry["question"]
+            answer = entry["answer"]
+
+            # Format: "Q: ...\nA: ...\n\n"
+            exchange = f"Q: {question}\nA: {answer}\n\n"
+            exchange_tokens = estimate_tokens(exchange)
+
+            # Check if adding this exchange would exceed budget
+            if total_tokens + exchange_tokens > max_tokens:
+                break
+
+            context_parts.insert(0, exchange)  # Insert at beginning to maintain chronological order
+            total_tokens += exchange_tokens
+
+        if not context_parts:
+            return ""
+
+        return "Previous conversation:\n" + "".join(context_parts)
 
     async def execute_query(self, query: str) -> str:
         """Execute the query using Claude CLI."""
@@ -251,12 +297,23 @@ class QueryScreen(Screen):
             # Stage 4: Query Claude (40-100%)
             # Animation pattern: 40% -> 90% over 15s, then 1%/5s to 99%, then 100% when done
 
-            # Create prompt for Claude
-            prompt = f"""{facts_context}
+            # Build conversation context using sliding window
+            conversation_context = self._build_conversation_context()
 
-Based on the facts above, please answer the following question. Include citations to specific fact numbers in your answer.
+            # Create prompt for Claude with conversation history
+            prompt_parts = [facts_context]
 
-Question: {query}"""
+            if conversation_context:
+                prompt_parts.append(conversation_context)
+
+            prompt_parts.append("""Based on the facts above, please answer the following question. Include citations to specific fact numbers in your answer.""")
+
+            if conversation_context:
+                prompt_parts.append("""If this question references previous answers (e.g., "it", "that", "the document"), use the conversation history to understand the context.""")
+
+            prompt_parts.append(f"\nQuestion: {query}")
+
+            prompt = "\n\n".join(prompt_parts)
 
             # Run claude command asynchronously
             process = await asyncio.create_subprocess_exec(
@@ -319,6 +376,13 @@ Question: {query}"""
         if event.state == WorkerState.SUCCESS:
             # Get result
             result = event.worker.result
+
+            # Add Q&A to conversation history for context in future queries
+            if self.current_query and result:
+                self.conversation_history.append({
+                    "question": self.current_query,
+                    "answer": result
+                })
 
             # Hide loading indicator and progress bar
             loading = self.query_one("#query-loading", LoadingIndicator)
