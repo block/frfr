@@ -208,10 +208,10 @@ Using embeddings instead of LLM-based comparison:
 - No paraphrasing in evidence quotes
 - Enables verification and trust
 
-### Temporal Orchestration
+### Workflow Orchestration 🔮 (Planned)
 - Session state persists across workflow steps
 - Parallel swarm execution with retries
-- Future: Resume sessions across CLI invocations
+- Resume sessions across CLI invocations
 
 ## Configuration
 
@@ -225,7 +225,7 @@ CLI flags:
 ## Interface
 
 ```bash
-$ frfr start-session --docs report.pdf spec.md
+$ frfr process documents/report.pdf documents/spec.md
 
 Loading documents...
 Session started: sess_abc123
@@ -272,21 +272,22 @@ Markdown report:
 **Language**: Python 3.10+
 
 **Dependencies**:
-- `anthropic`: Claude API
-- `temporalio`: Workflow orchestration
-- `sentence-transformers`: Embeddings
+- `anthropic`: Claude API (via CLI)
 - `pypdf2`, `pytesseract`: Document processing
 - `click`, `rich`: CLI
+- `textual`: TUI interface
+- 🔮 `temporalio`: Workflow orchestration (planned)
+- 🔮 `sentence-transformers`: Embeddings (planned)
 
 **Module Structure**:
 ```
 frfr/
 ├── documents/      # Parsing, chunking, storage
 ├── extraction/     # LLM fact extraction, swarm coordination
-├── consensus/      # Embeddings, clustering, comparison
-├── judge/          # Contradiction resolution, synthesis
-├── workflows/      # Temporal workflows and activities
-├── reporting/      # Markdown generation, formatting
+├── consensus/      # 🔮 Embeddings, clustering, comparison (planned)
+├── judge/          # 🔮 Contradiction resolution, synthesis (planned)
+├── workflows/      # 🔮 Workflow orchestration (planned)
+├── reporting/      # 🔮 Markdown generation, formatting (planned)
 └── cli.py          # Interactive CLI
 ```
 
@@ -321,7 +322,7 @@ frfr/
 
 **Exact citations**: Never paraphrase evidence.
 
-**Observability**: Temporal provides full execution history.
+**Observability**: Full execution history and session tracking.
 
 ---
 
@@ -339,8 +340,8 @@ frfr/
 - Swarm consensus: 🔮 Planned
 - Semantic clustering: 🔮 Planned
 - Contradiction resolution: 🔮 Planned
-- Interactive Q&A: 🔮 Planned
-- Temporal workflows: 🔮 Planned
+- Enhanced interactive Q&A: 🔮 Planned
+- Workflow orchestration: 🔮 Planned
 
 **Production Metrics (V5)**:
 - 1,011 validated facts from 155-page SOC2 report

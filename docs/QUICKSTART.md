@@ -1,25 +1,23 @@
 # Quick Start: Process and Query Your Documents
 
-Process PDFs and query them interactively using a single command. Works from your terminal on the host machine.
+Process PDFs and query them interactively using a single command.
 
 ## Prerequisites
 
-- Docker services running: `make up` (or `docker compose up -d`)
-- Your PDF in the `documents/` directory
+- Python 3.10+ installed
 - Claude CLI authenticated: `claude login`
+- Your PDF in a local directory
 
 ## Fastest Way: Process Command (PDF → Interactive Querying)
 
 Process a PDF from start to finish and enter interactive query mode:
 
 ```bash
-cd ~/Development/frfr
-
 # Process a document (extracts, analyzes, validates, and queries)
-docker compose exec frfr frfr process /app/documents/soc2_report.pdf
+frfr process documents/soc2_report.pdf
 
 # Or with custom settings
-docker compose exec frfr frfr process /app/documents/report.pdf \
+frfr process documents/report.pdf \
   --max-workers 11 \
   --multipass \
   --show-facts
@@ -40,120 +38,106 @@ Type `exit` to quit interactive mode.
 
 ## Alternative: Step-by-Step Extraction
 
-## Extract a PDF (Portable CLI)
-
-### Method 1: Simple wrapper script
+### Extract a PDF
 
 ```bash
-cd ~/Development/frfr
-
-# Extract the SOC2 report (all 155 pages)
-./extract-pdf test-doc.pdf soc2_report.txt
+# Extract the PDF to text
+frfr extract documents/report.pdf output/report_text.txt
 ```
 
-That's it! The output appears in `output/soc2_report.txt` on your host machine.
-
-### Method 2: Direct CLI command
+### Extract Facts
 
 ```bash
-cd ~/Development/frfr
-
-docker compose exec frfr frfr extract \
-    /app/documents/test-doc.pdf \
-    /app/output/soc2_full_text.txt
+# Extract structured facts from the text
+frfr extract-facts output/report_text.txt \
+  --document-name my_report \
+  --max-workers 11
 ```
 
-Output: `~/Development/frfr/output/soc2_full_text.txt`
-
-### Method 3: Your own PDF
+### Validate Facts
 
 ```bash
-cd ~/Development/frfr
+# Validate extracted facts against source
+frfr validate-facts output/my_report_facts.json output/report_text.txt
+```
 
-# Copy your PDF to documents/
-cp /path/to/your-file.pdf documents/
+### Query Interactively
 
-# Extract it
-./extract-pdf your-file.pdf your-output.txt
-
-# Or use the full CLI command
-docker compose exec frfr frfr extract \
-    /app/documents/your-file.pdf \
-    /app/output/your-output.txt
+```bash
+# Launch interactive query mode
+frfr interactive output/my_report_facts.json --show-facts
 ```
 
 ## View the Results
 
 ```bash
 # View the extracted text
-cat output/soc2_report.txt | head -100
+cat output/report_text.txt | head -100
 
 # Or with pagination
-less output/soc2_report.txt
+less output/report_text.txt
 
 # Search for specific content
-grep -i "authentication" output/soc2_report.txt
+grep -i "authentication" output/report_text.txt
 
 # Count words
-wc -w output/soc2_report.txt
+wc -w output/report_text.txt
 ```
 
 ## What You Get
 
-✅ **All 155 pages** - Complete document (~476K characters)  
-✅ **Clean text** - No OCR artifacts (`ccccccc`, `ssshhshshs`)  
-✅ **Fast** - PyPDF2 direct extraction (not OCR)  
-✅ **Encrypted PDFs** - Handles them automatically  
-✅ **Host accessible** - Output in `~/Development/frfr/output/`
+✅ **Complete extraction** - All pages processed
+✅ **Clean text** - No OCR artifacts
+✅ **Fast** - PyPDF2 direct extraction (OCR fallback when needed)
+✅ **Encrypted PDFs** - Handles them automatically
+✅ **Validated facts** - 100% verification against source
 
 ## Additional CLI Commands
 
 ### Get PDF info
 
 ```bash
-docker compose exec frfr frfr info /app/documents/test-doc.pdf
+frfr info documents/report.pdf
 ```
 
 ### CLI help
 
 ```bash
-docker compose exec frfr frfr --help
-docker compose exec frfr frfr extract --help
+frfr --help
+frfr extract --help
+frfr process --help
 ```
 
 ## Next Steps
 
-Use the extracted text for:
-- LLM question answering
-- Swarm consensus analysis  
-- Semantic search
+Use the extracted facts for:
+- Natural language Q&A
 - Compliance checking
+- Security analysis
+- Cross-document queries
 
 ## Troubleshooting
 
-**Issue:** `FileNotFoundError: PDF not found`  
-**Solution:** Ensure your PDF is in `~/Development/frfr/documents/`
+**Issue:** `FileNotFoundError: PDF not found`
+**Solution:** Ensure your PDF path is correct
 
 ```bash
-ls ~/Development/frfr/documents/
-# Should show: test-doc.pdf
+ls documents/
+# Should show your PDF file
 ```
 
-**Issue:** Docker services not running  
-**Solution:**
+**Issue:** `No Anthropic API key found`
+**Solution:** Authenticate with Claude CLI:
 
 ```bash
-cd ~/Development/frfr
-make up
-# or
-docker compose up -d
+claude login
 ```
 
-**Issue:** CLI command not found  
+**Issue:** CLI command not found
 **Solution:** Reinstall the package:
 
 ```bash
-docker compose exec frfr pip install -e /app
+pip install -e .
 ```
 
 ## Architecture
@@ -162,5 +146,6 @@ The extraction uses:
 - **PyPDF2** - Fast, clean text extraction for text-based PDFs
 - **pycryptodome** - Handles encrypted PDFs automatically
 - **Tesseract OCR** - Fallback for scanned/image PDFs (rarely needed)
+- **Claude CLI** - LLM-based fact extraction and validation
 
 The CLI intelligently chooses the best method for your PDF.

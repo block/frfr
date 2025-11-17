@@ -2,7 +2,7 @@
 
 High-confidence document Q&A system using LLM swarm consensus with hallucination detection and correction.
 
-> **Quick Links**: [🚀 Quick Start](docs/QUICKSTART.md) | [Docker Guide](docs/README.docker.md) | [Design Doc](docs/DESIGN.md) | [All Docs](docs/DOCS_INDEX.md)
+> **Quick Links**: [🚀 Quick Start](docs/QUICKSTART.md) | [Design Doc](docs/DESIGN.md) | [All Docs](docs/DOCS_INDEX.md)
 
 **Ready to process your PDF?**
 - **Interactive TUI**: Simply run `frfr` to launch the Terminal User Interface for visual session management
@@ -125,8 +125,7 @@ Future enhancements will add:
 - **Swarm Consensus**: Multiple LLM instances with voting
 - **Semantic Clustering**: Group similar facts, detect outliers
 - **Contradiction Resolution**: Judge model for conflicting facts
-- **Interactive Q&A**: Natural language queries over extracted facts
-- **Temporal Workflows**: Distributed orchestration
+- **Enhanced Interactive Q&A**: Advanced querying capabilities over extracted facts
 
 ## Module Structure
 
@@ -167,7 +166,7 @@ frfr/
 │   ├── judge/                      # 🔮 PLANNED (Phase 2)
 │   │   └── __init__.py             # (empty - future judge model)
 │   ├── workflows/                  # 🔮 PLANNED (Phase 2)
-│   │   └── __init__.py             # (empty - future Temporal)
+│   │   └── __init__.py             # (empty - future orchestration)
 │   └── reporting/                  # 🔮 PLANNED (Phase 2)
 │       └── __init__.py             # (empty - future reporting)
 │
@@ -186,50 +185,12 @@ frfr/
 
 ## Prerequisites
 
-### Docker Setup (Recommended)
-- Docker Desktop or Docker Engine with docker-compose
-- Anthropic API key
-
-### Manual Setup
 - Python 3.10+
-- Claude API access (assumes pre-configured via environment)
+- Claude CLI (authenticated with `claude login`)
 - ImageMagick
 - Tesseract OCR
-- Temporal (dev server script provided)
 
 ## Installation
-
-### Docker Setup (Recommended)
-
-The easiest way to get started is with Docker. See [README.docker.md](docs/README.docker.md) for full details.
-
-```bash
-# Clone repository
-git clone <repo-url>
-cd frfr
-
-# Create .env file with your API key
-make init
-nano .env  # Edit with your ANTHROPIC_API_KEY
-
-# Build and start all services
-make build
-make up
-
-# Open a shell in the container
-make shell
-
-# Inside container: place documents and run
-frfr start-session --docs /app/documents/report.pdf
-```
-
-**Docker setup includes:**
-- Temporal server with Web UI (http://localhost:8233)
-- PostgreSQL database
-- All system dependencies (ImageMagick, Tesseract)
-- Isolated network and persistent storage
-
-### Manual Setup
 
 ```bash
 # Clone repository
@@ -237,32 +198,17 @@ git clone <repo-url>
 cd frfr
 
 # Install system dependencies (macOS)
-brew install imagemagick tesseract temporal
+brew install imagemagick tesseract
 
 # Install Python dependencies
 pip install -r requirements.txt
 
 # Install package in development mode
 pip install -e .
+
+# Authenticate with Claude CLI
+claude login
 ```
-
-## Setup
-
-### Docker
-All services start automatically with `make up`. See [README.docker.md](docs/README.docker.md).
-
-### Manual
-The system requires Temporal for workflow orchestration. A convenience script is provided:
-
-```bash
-# Start Temporal dev server (runs in background)
-python scripts/start_temporal.py
-```
-
-This script will:
-- Check if Temporal is already running
-- Start a dev server if not running
-- Create the `frfr` namespace if it doesn't exist
 
 ## PDF Text Extraction API
 
@@ -270,84 +216,35 @@ The primary entrypoint for document processing is the PDF extraction API. It pro
 
 ### Quick Start: Extract a PDF
 
-From your terminal on the host machine:
+Using the CLI:
 
 ```bash
-cd ~/Development/frfr
-
-# Extract the SOC2 report (all 155 pages)
-./extract-pdf test-doc.pdf soc2_report.txt
+# Extract a PDF
+frfr extract your-file.pdf output/extracted_text.txt
 
 # View the output
-cat output/soc2_report.txt | head -50
+cat output/extracted_text.txt | head -50
 ```
 
-That's it! The output appears in `~/Development/frfr/output/` on your host machine.
-
-**For your own PDFs:**
-
-```bash
-# Copy your PDF to documents/
-cp /path/to/your-file.pdf documents/
-
-# Extract it
-./extract-pdf your-file.pdf output.txt
-```
-
-### Full Document Extraction
-
-To extract an entire PDF (all pages):
-
-```bash
-# From your host terminal
-cd ~/Development/frfr
-docker compose exec frfr python3 << 'EOF'
-from frfr.documents import extract_pdf_to_text
-
-result = extract_pdf_to_text(
-    pdf_path='/app/documents/your-file.pdf',
-    output_path='/app/output/full_document.txt'
-)
-
-print(f"✓ Extracted {result['pages']} pages")
-print(f"  Method: {result['method']}")
-print(f"  Characters: {result['total_chars']:,}")
-EOF
-
-# View the output on your host
-cat output/full_document.txt
-```
-
-### Python API (Inside Container)
+### Python API
 
 ```python
 from frfr.documents import extract_pdf_to_text, get_pdf_info
 
 # Get PDF metadata
-info = get_pdf_info('/app/documents/your-file.pdf')
+info = get_pdf_info('documents/your-file.pdf')
 print(f"Pages: {info['pages']}")
 print(f"Encrypted: {info['is_encrypted']}")
 
 # Extract full PDF to text file
 result = extract_pdf_to_text(
-    pdf_path='/app/documents/your-file.pdf',
-    output_path='/app/output/extracted_text.txt'
+    pdf_path='documents/your-file.pdf',
+    output_path='output/extracted_text.txt'
 )
 
 print(f"Method: {result['method']}")      # 'pypdf2' (fast, clean)
 print(f"Pages: {result['pages']}")         # 155
 print(f"Characters: {result['total_chars']:,}")  # 476,143
-```
-
-### Example Script
-
-Run the included example to test extraction:
-
-```bash
-# From host terminal
-docker compose exec frfr python3 /app/scripts/example_pdf_extraction.py
-
-# Output appears in ~/Development/frfr/output/example_extraction.txt
 ```
 
 ### Extraction Strategy
@@ -430,11 +327,11 @@ Sessions are automatically named using Claude LLM based on your documents:
 
 ```bash
 # Single document
-frfr process soc2_audit_report.pdf
+frfr process documents/soc2_audit_report.pdf
 # Creates: sess_soc2_audit_report_20251105_164525
 
 # Multiple documents
-frfr process vendor_security.pdf compliance_docs.pdf risk_assessment.pdf
+frfr process documents/vendor_security.pdf documents/compliance_docs.pdf documents/risk_assessment.pdf
 # Creates: sess_vendor_security_compliance_20251105_164531
 # (Claude generates a succinct title from document names)
 ```
@@ -445,16 +342,16 @@ As you add documents, the session name updates to stay topical:
 
 ```bash
 # Start with first document
-frfr process vendor_questionnaire.pdf
+frfr process documents/vendor_questionnaire.pdf
 # Session: sess_vendor_questionnaire_20251105_173454
 
 # Add second document - session automatically renamed!
-frfr process vendor_questionnaire.pdf compliance_report.pdf
+frfr process documents/vendor_questionnaire.pdf documents/compliance_report.pdf
 # Session: sess_security_compliance_documentation_20251105_173454
 # ℹ  Session name updated to reflect documents
 
 # Add third document - renamed again!
-frfr process vendor_questionnaire.pdf compliance_report.pdf risk_assessment.pdf
+frfr process documents/vendor_questionnaire.pdf documents/compliance_report.pdf documents/risk_assessment.pdf
 # Session: sess_security_compliance_assessment_20251105_173454
 # ℹ  Session name updated to reflect documents
 ```
@@ -467,12 +364,12 @@ Process multiple PDFs in a single session for cross-document analysis:
 
 ```bash
 # Process multiple documents together
-frfr process doc1.pdf doc2.pdf doc3.pdf
+frfr process documents/doc1.pdf documents/doc2.pdf documents/doc3.pdf
 
 # Or build up a session over time
-frfr process doc1.pdf --session-id my_session
-frfr process doc2.pdf --session-id my_session  # Adds to existing session
-frfr process doc3.pdf --session-id my_session  # Session name updates
+frfr process documents/doc1.pdf --session-id my_session
+frfr process documents/doc2.pdf --session-id my_session  # Adds to existing session
+frfr process documents/doc3.pdf --session-id my_session  # Session name updates
 ```
 
 Each document is tracked with:
@@ -715,8 +612,7 @@ Generated reports include:
 - 🔮 Multi-instance swarm extraction with consensus voting
 - 🔮 Semantic clustering and outlier detection
 - 🔮 Contradiction detection and judge resolution
-- 🔮 Interactive Q&A over extracted facts
-- 🔮 Temporal workflow orchestration
+- 🔮 Enhanced interactive Q&A over extracted facts
 - 🔮 Web UI wrapper around CLI
 
 ## Contributing
