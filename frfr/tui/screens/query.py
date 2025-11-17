@@ -201,7 +201,42 @@ class QueryScreen(Screen):
         return "Previous conversation:\n" + "".join(context_parts)
 
     async def execute_query(self, query: str) -> str:
-        """Execute the query using Claude CLI."""
+        """Execute the query using Claude CLI with retry on context limit errors."""
+        # Try with progressively smaller conversation history if we hit context limits
+        max_token_budgets = [20000, 10000, 5000, 0]  # Token budgets to try
+
+        for attempt, budget in enumerate(max_token_budgets):
+            try:
+                if attempt > 0:
+                    # Inform user we're retrying with less history
+                    status_widget = self.query_one("#query-status", Static)
+                    if budget > 0:
+                        status_widget.update(f"[bold yellow]⚠️ Context too large, truncating history to {budget} tokens and retrying...[/bold yellow]")
+                    else:
+                        status_widget.update(f"[bold yellow]⚠️ Context too large, removing all conversation history and retrying...[/bold yellow]")
+                    await asyncio.sleep(1)  # Give user time to see the message
+
+                result = await self._execute_query_attempt(query, max_conversation_tokens=budget)
+                return result
+
+            except Exception as e:
+                error_str = str(e)
+                # Check if this is a context limit error
+                if "prompt is too long" in error_str.lower() or "context_length_exceeded" in error_str.lower() or "maximum context length" in error_str.lower():
+                    # If this was the last attempt (no conversation history), give up
+                    if budget == 0:
+                        return f"[red]Error: Context limit exceeded even without conversation history. The facts may be too large for the model.[/red]"
+                    # Otherwise, continue to next attempt with smaller budget
+                    continue
+                else:
+                    # Non-context-limit error, don't retry
+                    return f"[red]Error: {error_str}[/red]"
+
+        # Should never reach here, but just in case
+        return "[red]Error: Failed to execute query after all retry attempts[/red]"
+
+    async def _execute_query_attempt(self, query: str, max_conversation_tokens: int = 20000) -> str:
+        """Execute a single query attempt with specified conversation token budget."""
         try:
             # Helper function to update UI from async worker
             async def update_progress(stage_progress: int, status_text: str):
@@ -220,29 +255,29 @@ class QueryScreen(Screen):
                 # Load session metadata to find facts files
                 metadata_file = session_dir / "metadata.json"
                 if not metadata_file.exists():
-                    return f"[red]Error: Session metadata not found at {metadata_file}[/red]"
+                    raise FileNotFoundError(f"Session metadata not found at {metadata_file}")
 
                 with open(metadata_file) as mf:
                     metadata = json.load(mf)
                     documents = metadata.get("document_registry", {})
 
                     if not documents:
-                        return f"[red]Error: No documents found in session {self.session_id}[/red]"
+                        raise ValueError(f"No documents found in session {self.session_id}")
 
                     # Use first document's facts file
                     first_doc = list(documents.values())[0]
                     facts_file_path = first_doc.get("facts_file", "")
 
                     if not facts_file_path:
-                        return f"[red]Error: Document has no facts_file path in metadata[/red]"
+                        raise ValueError("Document has no facts_file path in metadata")
 
                     self.facts_file = Path(facts_file_path)
 
             if not self.facts_file:
-                return f"[red]Error: Could not determine facts file path for session {self.session_id}[/red]"
+                raise ValueError(f"Could not determine facts file path for session {self.session_id}")
 
             if not self.facts_file.exists():
-                return f"[red]Error: Facts file not found at {self.facts_file}[/red]"
+                raise FileNotFoundError(f"Facts file not found at {self.facts_file}")
 
             await update_progress(10, "📄 Loading facts from JSON...")
 
@@ -260,7 +295,7 @@ class QueryScreen(Screen):
                     facts = facts_data.get("facts", [])
 
             if not facts:
-                return "[red]Error: No facts found in file[/red]"
+                raise ValueError("No facts found in file")
 
             total_facts = len(facts)
             await update_progress(20, f"🔨 Building context from {total_facts} facts...")
@@ -297,8 +332,8 @@ class QueryScreen(Screen):
             # Stage 4: Query Claude (40-100%)
             # Animation pattern: 40% -> 90% over 15s, then 1%/5s to 99%, then 100% when done
 
-            # Build conversation context using sliding window
-            conversation_context = self._build_conversation_context()
+            # Build conversation context using sliding window with specified token budget
+            conversation_context = self._build_conversation_context(max_tokens=max_conversation_tokens)
 
             # Create prompt for Claude with conversation history
             prompt_parts = [facts_context]
@@ -350,7 +385,7 @@ class QueryScreen(Screen):
             except asyncio.TimeoutError:
                 process.kill()
                 await process.wait()
-                return "[red]Query timed out[/red]"
+                raise RuntimeError("Query timed out")
             finally:
                 # Cancel animation task
                 animation_task.cancel()
@@ -366,10 +401,12 @@ class QueryScreen(Screen):
             if process.returncode == 0:
                 return stdout_text
             else:
-                return f"[red]Error running query: {stderr_text}[/red]"
+                # Raise error so retry logic can catch it
+                raise RuntimeError(f"Error running query: {stderr_text}")
 
         except Exception as e:
-            return f"[red]Error: {str(e)}[/red]"
+            # Re-raise exception so retry logic can handle it
+            raise
 
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
         """Handle worker state changes."""
