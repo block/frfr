@@ -248,8 +248,11 @@ class Session:
         Returns:
             List of all extracted facts
         """
+        import glob as glob_module
         all_facts = []
-        for facts_file in sorted(self.facts_dir.glob(f"{document_name}_chunk_*.json")):
+        # Escape special characters in document name for glob pattern
+        escaped_name = glob_module.escape(document_name)
+        for facts_file in sorted(self.facts_dir.glob(f"{escaped_name}_chunk_*.json")):
             with open(facts_file, "r") as f:
                 facts = json.load(f)
                 all_facts.extend(facts)
@@ -278,8 +281,11 @@ class Session:
         Returns:
             Sorted list of chunk IDs
         """
+        import glob as glob_module
         chunk_ids = []
-        for facts_file in self.facts_dir.glob(f"{document_name}_chunk_*.json"):
+        # Escape special characters in document name for glob pattern
+        escaped_name = glob_module.escape(document_name)
+        for facts_file in self.facts_dir.glob(f"{escaped_name}_chunk_*.json"):
             # Extract chunk ID from filename (e.g., "doc_chunk_0005.json" -> 5)
             filename = facts_file.stem
             chunk_part = filename.split("_chunk_")[-1]

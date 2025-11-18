@@ -59,6 +59,8 @@ class FactsBrowserScreen(Screen):
         self.all_facts: List[Dict[str, Any]] = []
         self.filtered_facts: List[Dict[str, Any]] = []
         self.selected_fact: Optional[Dict[str, Any]] = None
+        self._search_timer: Optional[Any] = None  # Debounce timer for search
+        self._pending_search: str = ""  # Pending search term
 
     def compose(self) -> ComposeResult:
         """Compose the facts browser layout."""
@@ -145,18 +147,54 @@ class FactsBrowserScreen(Screen):
         count_widget.update(f"\n[cyan]{len(self.filtered_facts)} facts[/cyan]")
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        """Handle search input changes."""
+        """Handle search input changes with debouncing."""
         if event.input.id == "search-input":
-            search_term = event.value.lower()
-            if search_term:
-                self.filtered_facts = [
-                    fact for fact in self.all_facts
-                    if search_term in fact.get("claim", "").lower()
-                ]
-            else:
-                self.filtered_facts = self.all_facts.copy()
+            # Cancel previous timer if exists
+            if self._search_timer is not None:
+                self._search_timer.stop()
 
-            self.refresh_facts_list()
+            # Store the search term
+            self._pending_search = event.value
+
+            # Set a new timer to execute search after 300ms of no typing
+            self._search_timer = self.set_timer(
+                0.3,  # 300ms delay
+                lambda: self._execute_search(self._pending_search)
+            )
+
+    def _execute_search(self, search_term: str) -> None:
+        """Execute the search filtering (called after debounce delay)."""
+        # Run search in background to avoid blocking UI
+        self.run_worker(
+            self._search_worker(search_term),
+            exclusive=False
+        )
+
+    async def _search_worker(self, search_term: str) -> None:
+        """Background worker for search filtering."""
+        import asyncio
+
+        search_term = search_term.lower()
+
+        # Show searching indicator briefly
+        count_widget = self.query_one("#fact-count", Static)
+        count_widget.update("\n[yellow]Searching...[/yellow]")
+
+        # Give UI a chance to update
+        await asyncio.sleep(0.01)
+
+        # Perform filtering
+        if search_term:
+            self.filtered_facts = [
+                fact for fact in self.all_facts
+                if search_term in fact.get("claim", "").lower()
+            ]
+        else:
+            self.filtered_facts = self.all_facts.copy()
+
+        # Refresh the list on main thread
+        self.call_from_thread(self.refresh_facts_list)
+        self._search_timer = None
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         """Handle fact selection."""

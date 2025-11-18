@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -12,7 +13,11 @@ from textual.widgets import Static, Input, Button, RichLog, Label, LoadingIndica
 from textual.containers import Container, Vertical, Horizontal
 from textual.binding import Binding
 from textual.worker import Worker, WorkerState
+from textual.widgets._rich_log import RichLog as RichLogWidget
 from rich.markdown import Markdown
+from rich.text import Text
+
+from frfr.conversation import ChunkManager, ChunkWithEvidence
 
 
 class QueryScreen(Screen):
@@ -47,9 +52,28 @@ class QueryScreen(Screen):
     }
 
     #query-results {
-        height: 1fr;
-        min-height: 20;
+        height: 3fr;
+        min-height: 15;
         border: solid $primary;
+    }
+
+    #chunk-context-container {
+        height: 2fr;
+        min-height: 10;
+        margin-top: 1;
+    }
+
+    #chunk-context-panel {
+        height: 100%;
+        border: solid $accent;
+        padding: 1;
+    }
+
+    .chunk-header {
+        background: $accent;
+        color: $text;
+        padding: 0 1;
+        margin-bottom: 1;
     }
     """
 
@@ -61,6 +85,12 @@ class QueryScreen(Screen):
         self.history_index = -1
         self.conversation_history: List[Dict[str, str]] = []  # Store Q&A pairs for context
         self.current_query: str = ""  # Track current query for conversation history
+
+        # Initialize ChunkManager for context-aware responses
+        session_path = Path(".frfr_sessions") / session_id
+        self.chunk_manager = ChunkManager(session_path)
+        self.current_chunks: List[ChunkWithEvidence] = []  # Track chunks used in current response
+        self.current_facts: List[Dict] = []  # Track facts for interactive clicking
 
     def compose(self) -> ComposeResult:
         """Compose the query interface layout."""
@@ -77,7 +107,7 @@ class QueryScreen(Screen):
                     yield Label("\n[bold]Commands[/bold]")
                     yield Static(self._build_commands_text(), id="commands-panel")
 
-                # Right panel: Query interface
+                # Right panel: Query interface and chunk context
                 with Vertical(id="right-panel"):
                     with Horizontal():
                         yield Input(placeholder="Ask a question...", id="query-input")
@@ -87,6 +117,11 @@ class QueryScreen(Screen):
                         yield LoadingIndicator(id="query-loading")
                         yield Static("", id="query-status")
                     yield RichLog(id="query-results", highlight=True, markup=True, wrap=True)
+
+                    # Chunk context panel
+                    with Container(id="chunk-context-container"):
+                        yield Static("[bold]📄 Source Context[/bold]", classes="chunk-header")
+                        yield RichLog(id="chunk-context-panel", highlight=True, markup=True, wrap=True)
 
     def on_mount(self) -> None:
         """Initialize the screen when mounted."""
@@ -104,7 +139,13 @@ class QueryScreen(Screen):
         # Show welcome message
         results_log = self.query_one("#query-results", RichLog)
         results_log.write("[bold cyan]Welcome to the Query Interface[/bold cyan]")
-        results_log.write("[dim]Type your question and press Ctrl+Enter to submit.[/dim]\n")
+        results_log.write("[dim]Type your question and press Ctrl+Enter to submit.[/dim]")
+        results_log.write("[dim]Tip: Type 'fact N' (e.g., 'fact 3') to view source context for a specific fact.[/dim]\n")
+
+        # Initialize chunk context panel
+        chunk_panel = self.query_one("#chunk-context-panel", RichLog)
+        chunk_panel.write("[dim]Source context from documents will appear here when you submit a query.[/dim]")
+        chunk_panel.write("[dim]Evidence will be highlighted in yellow. Type 'fact N' to view a specific fact.[/dim]")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses."""
@@ -123,6 +164,14 @@ class QueryScreen(Screen):
 
         if not query:
             self.app.notify("Please enter a question", severity="warning")
+            return
+
+        # Check if this is a "fact N" command to view specific fact context
+        fact_match = re.match(r'^(?:show\s+)?fact\s+(\d+)$', query, re.IGNORECASE)
+        if fact_match:
+            fact_num = int(fact_match.group(1))
+            self.show_fact_context(fact_num)
+            query_input.value = ""
             return
 
         # Add to history
@@ -297,6 +346,9 @@ class QueryScreen(Screen):
             if not facts:
                 raise ValueError("No facts found in file")
 
+            # Store facts for interactive clicking
+            self.current_facts = facts
+
             total_facts = len(facts)
             await update_progress(20, f"🔨 Building context from {total_facts} facts...")
 
@@ -327,21 +379,48 @@ class QueryScreen(Screen):
                     self.query_one("#query-progress", ProgressBar).update(progress=current_progress)
                     await asyncio.sleep(0)  # Yield to event loop
 
-            await update_progress(40, f"🤖 Querying Claude with {total_facts} facts...")
+            await update_progress(40, f"🧩 Building chunk context from source documents...")
 
-            # Stage 4: Query Claude (40-100%)
-            # Animation pattern: 40% -> 90% over 15s, then 1%/5s to 99%, then 100% when done
+            # Stage 4: Build chunk context for richer responses (40-50%)
+            # Reserve token budget: conversation history gets half, chunks get half
+            conversation_budget = max_conversation_tokens // 2
+            chunk_budget = max_conversation_tokens // 2
+
+            # Build chunk context from facts
+            chunk_context, used_chunks = self.chunk_manager.build_chunk_context(
+                facts=facts,
+                query=query,
+                token_budget=chunk_budget
+            )
+
+            # Store chunks for display in context panel
+            self.current_chunks = used_chunks
+
+            await update_progress(50, f"🤖 Querying Claude with {total_facts} facts and {len(used_chunks)} source chunks...")
+
+            # Stage 5: Query Claude (50-100%)
+            # Animation pattern: 50% -> 90% over 15s, then 1%/5s to 99%, then 100% when done
 
             # Build conversation context using sliding window with specified token budget
-            conversation_context = self._build_conversation_context(max_tokens=max_conversation_tokens)
+            conversation_context = self._build_conversation_context(max_tokens=conversation_budget)
 
-            # Create prompt for Claude with conversation history
+            # Create prompt for Claude with enhanced multi-hop reasoning support
             prompt_parts = [facts_context]
+
+            # Add chunk context for richer understanding
+            if chunk_context:
+                prompt_parts.append(chunk_context)
 
             if conversation_context:
                 prompt_parts.append(conversation_context)
 
-            prompt_parts.append("""Based on the facts above, please answer the following question. Include citations to specific fact numbers in your answer.""")
+            prompt_parts.append("""Based on the facts above and the full context from source documents, please answer the following question.
+
+When answering:
+- Include citations to specific fact numbers in your answer (e.g., "According to Fact 3...")
+- Use the full chunk context to find connections between facts across different sections and documents
+- Draw insights by combining related information from multiple sources (multi-hop reasoning)
+- If you find relevant details in the chunk context that aren't captured in the extracted facts, include them in your answer""")
 
             if conversation_context:
                 prompt_parts.append("""If this question references previous answers (e.g., "it", "that", "the document"), use the conversation history to understand the context.""")
@@ -361,14 +440,14 @@ class QueryScreen(Screen):
             progress_bar = self.query_one("#query-progress", ProgressBar)
             async def animate_progress():
                 """Animate progress with realistic timing:
-                - 40% to 90% over 15 seconds
+                - 50% to 90% over 15 seconds
                 - Then 1% every 5 seconds (90% -> 99%)
                 """
-                # Phase 1: 40% -> 90% over 15 seconds (50% progress)
-                # Update every 0.3 seconds for smooth animation (15s / 50 steps = 0.3s per %)
-                for i in range(40, 90):
+                # Phase 1: 50% -> 90% over 15 seconds (40% progress)
+                # Update every 0.375 seconds for smooth animation (15s / 40 steps = 0.375s per %)
+                for i in range(50, 90):
                     progress_bar.update(progress=i)
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(0.375)
 
                 # Phase 2: 90% -> 99% at 1% per 5 seconds
                 for i in range(90, 99):
@@ -432,6 +511,9 @@ class QueryScreen(Screen):
             results_log = self.query_one("#query-results", RichLog)
             results_log.write(f"[green]A:[/green] {result}\n")
 
+            # Update chunk context panel with used chunks
+            self._display_chunk_context()
+
             # Update status
             status_widget = self.query_one("#query-status", Static)
             status_widget.update("[bold green]✓ Query completed successfully![/bold green]")
@@ -477,12 +559,187 @@ class QueryScreen(Screen):
             query_input = self.query_one("#query-input", Input)
             query_input.value = ""
 
+    def show_fact_context(self, fact_num: int) -> None:
+        """Show context for a specific fact number."""
+        # Validate fact number
+        if not self.current_facts:
+            self.app.notify("No facts loaded yet. Please run a query first.", severity="warning")
+            return
+
+        if fact_num < 1 or fact_num > len(self.current_facts):
+            self.app.notify(f"Invalid fact number. Please use 1-{len(self.current_facts)}.", severity="error")
+            return
+
+        # Get the specific fact (1-indexed)
+        fact = self.current_facts[fact_num - 1]
+
+        # Update results panel with fact info
+        results_log = self.query_one("#query-results", RichLog)
+        results_log.write(f"\n[bold cyan]📌 Viewing Fact {fact_num}:[/bold cyan]")
+        results_log.write(f"[bold]{fact.get('claim', 'No claim')}[/bold]")
+        results_log.write(f"[dim]Source: {fact.get('source_location', 'Unknown')}[/dim]")
+        results_log.write(f"[dim]Document: {fact.get('source_doc', 'Unknown')}[/dim]\n")
+
+        # Get chunk for this fact
+        document = fact.get("source_doc", "").replace(".pdf", "")
+        chunk = self.chunk_manager.find_chunk_for_fact(fact, document)
+
+        # Debug info
+        if chunk:
+            results_log.write(f"[dim]Found in chunk: {chunk.chunk_id} (lines {chunk.line_start}-{chunk.line_end})[/dim]\n")
+
+        chunk_panel = self.query_one("#chunk-context-panel", RichLog)
+        chunk_panel.clear()
+
+        if not chunk:
+            chunk_panel.write(f"[yellow]⚠️ Could not find source chunk for Fact {fact_num}[/yellow]")
+            chunk_panel.write(f"[dim]The chunk file may not exist in the session.[/dim]")
+            return
+
+        # Display chunk header
+        chunk_panel.write(f"[bold cyan]📄 Source Context for Fact {fact_num}:[/bold cyan]\n")
+        chunk_panel.write(f"[bold yellow]{chunk.document}[/bold yellow]")
+        chunk_panel.write(f"[dim]Lines {chunk.line_start}-{chunk.line_end}[/dim]")
+        chunk_panel.write("")  # Blank line
+
+        # STRATEGY 1: Use line numbers directly from source_location (most reliable!)
+        source_location = fact.get("source_location", "")
+        line_match = re.search(r'[Ll]ines?\s+(\d+)(?:-(\d+))?', source_location)
+
+        focused_text = None
+        successful_strategy = None
+
+        if line_match:
+            target_start = int(line_match.group(1))
+            target_end = int(line_match.group(2)) if line_match.group(2) else target_start
+
+            # Check if these lines are in the chunk
+            if chunk.line_start <= target_start <= chunk.line_end:
+                # Use direct line number display
+                focused_text = self.chunk_manager.get_lines_in_range(
+                    chunk.text,
+                    target_start,
+                    target_end,
+                    context_lines=5,
+                    chunk_start_line=chunk.line_start
+                )
+
+                if focused_text and "outside chunk range" not in focused_text.lower():
+                    successful_strategy = ("exact line numbers", f"Lines {target_start}-{target_end}")
+                    chunk_panel.write(f"[dim]Showing lines {target_start}-{target_end} from source_location[/dim]")
+                    chunk_panel.write("")  # Blank line
+
+        # STRATEGY 2: Fall back to text search if line numbers didn't work
+        if not successful_strategy:
+            search_attempts = []
+
+            # Try evidence quotes
+            if "evidence_quotes" in fact and fact["evidence_quotes"]:
+                evidence_texts = [eq["quote"] for eq in fact["evidence_quotes"] if isinstance(eq, dict)]
+                if evidence_texts:
+                    search_attempts.append(("evidence quotes", evidence_texts))
+            elif "evidence_quote" in fact and fact["evidence_quote"]:
+                search_attempts.append(("evidence quote", [fact["evidence_quote"]]))
+
+            # Try claim text
+            claim = fact.get('claim', '')
+            if claim:
+                claim_words = claim.split()
+                if len(claim_words) >= 5:
+                    search_attempts.append(("full claim", [claim]))
+                    mid = len(claim_words) // 2
+                    first_half = ' '.join(claim_words[:mid+2])
+                    second_half = ' '.join(claim_words[mid-2:])
+                    if len(first_half.split()) >= 4:
+                        search_attempts.append(("first half of claim", [first_half]))
+                    if len(second_half.split()) >= 4:
+                        search_attempts.append(("second half of claim", [second_half]))
+
+            # Try each search strategy
+            for strategy_name, search_texts in search_attempts:
+                focused_text = self.chunk_manager.get_focused_context(
+                    chunk.text,
+                    search_texts,
+                    context_lines=5,
+                    start_line_num=chunk.line_start
+                )
+
+                if focused_text and "not found" not in focused_text.lower():
+                    successful_strategy = (strategy_name, search_texts[0] if search_texts else "")
+                    preview = search_texts[0][:60] + "..." if len(search_texts[0]) > 60 else search_texts[0]
+                    chunk_panel.write(f"[dim]Found using {strategy_name}: \"{preview}\"[/dim]")
+                    chunk_panel.write("")  # Blank line
+                    break
+
+        # STRATEGY 3: Show full chunk if nothing worked
+        if not focused_text or "not found" in focused_text.lower():
+            chunk_panel.write("[yellow]⚠️ Could not locate specific lines in chunk.[/yellow]")
+            chunk_panel.write("[dim]Showing first 30 lines of chunk:[/dim]\n")
+
+            lines = chunk.text.split('\n')
+            for i, line in enumerate(lines[:30]):
+                line_num = chunk.line_start + i
+                chunk_panel.write(f"[dim]{line_num:4d} │ {line}[/dim]")
+
+            if len(lines) > 30:
+                chunk_panel.write(f"[dim]     │ ... ({len(lines) - 30} more lines)[/dim]")
+
+            focused_text = None
+
+        # Write the focused text if we have it
+        if focused_text:
+            chunk_panel.write(focused_text)
+            chunk_panel.write("")  # Blank line
+
+        chunk_panel.write("[dim]Legend: Line numbers shown on left. Highlighted lines (yellow) contain evidence.[/dim]")
+        chunk_panel.write("[dim]Type 'fact N' to view another fact.[/dim]")
+
+        # Notify user
+        self.app.notify(f"Showing context for Fact {fact_num}", severity="information")
+
+    def _display_chunk_context(self) -> None:
+        """Display chunk context in the context panel."""
+        chunk_panel = self.query_one("#chunk-context-panel", RichLog)
+
+        # Clear previous content
+        chunk_panel.clear()
+
+        if not self.current_chunks:
+            chunk_panel.write("[dim]No source chunks were used for this query.[/dim]")
+            return
+
+        chunk_panel.write(f"[bold cyan]Showing {len(self.current_chunks)} relevant source excerpts:[/bold cyan]\n")
+
+        for i, chunk_with_evidence in enumerate(self.current_chunks, 1):
+            chunk_info = chunk_with_evidence.chunk_info
+
+            # Header with metadata
+            header = f"\n[bold yellow]─── Excerpt {i}: {chunk_info.document} ───[/bold yellow]"
+            chunk_panel.write(header)
+
+            metadata = f"[dim]Lines {chunk_info.line_start}-{chunk_info.line_end} | Referenced by Facts: {', '.join(map(str, chunk_with_evidence.fact_ids))}[/dim]"
+            chunk_panel.write(metadata)
+
+            chunk_panel.write("")  # Blank line
+
+            # Use focused context with line numbers instead of full chunk
+            focused_text = self.chunk_manager.get_focused_context(
+                chunk_info.text,
+                chunk_with_evidence.evidence_texts,
+                context_lines=5,
+                start_line_num=chunk_info.line_start
+            )
+
+            chunk_panel.write(focused_text)
+            chunk_panel.write("")  # Blank line
+
     def _build_commands_text(self) -> str:
         """Build the commands help text."""
         commands = [
             "[cyan]Ctrl+Enter[/cyan] Submit",
             "[cyan]↑[/cyan]          Previous",
             "[cyan]↓[/cyan]          Next",
+            "[cyan]fact N[/cyan]     View fact",
             "",
             "[cyan]Esc[/cyan]        Back",
             "[cyan]q[/cyan]          Quit",

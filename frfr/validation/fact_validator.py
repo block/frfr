@@ -928,8 +928,11 @@ If the claim does NOT need multiple quotes or cannot be supported by this contex
         facts_dir = session_dir / "facts"
 
         # Load all fact files
+        import glob as glob_module
         all_facts = []
-        fact_files = sorted(facts_dir.glob(f"{document_name}_chunk_*.json"))
+        # Escape special characters in document name for glob pattern
+        escaped_name = glob_module.escape(document_name)
+        fact_files = sorted(facts_dir.glob(f"{escaped_name}_chunk_*.json"))
 
         for fact_file in fact_files:
             with open(fact_file, "r") as f:

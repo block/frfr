@@ -20,7 +20,8 @@
       "Bash(python test_session_name.py:*)",
       "Bash(python:*)",
       "Bash(tee:*)",
-      "Bash(./venv/bin/python:*)"
+      "Bash(./venv/bin/python:*)",
+      "Bash(chmod:*)"
     ],
     "deny": [],
     "ask": []

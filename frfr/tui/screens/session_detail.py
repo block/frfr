@@ -273,15 +273,15 @@ class SessionDetailScreen(Screen):
                     handle_resume_choice
                 )
             elif progress_summary and progress_summary["incomplete"] == 0 and progress_summary["total"] > 0:
-                # All chunks completed - just do consolidation (resume mode with 0 incomplete)
-                self.app.notify(f"All chunks complete, consolidating {doc_name}...", severity="information")
+                # All chunks completed - do full reprocess from scratch
+                self.app.notify(f"Reprocessing {doc_name} from scratch...", severity="information")
 
-                # Use resume mode with no incomplete chunks - will skip to consolidation
+                # Don't use resume mode - do a full reprocess
                 self.app.push_screen(ProcessingScreen(
                     file_paths=[original_pdf_path],
                     session_id=self.session_info.session_id,
                     is_new_session=False,
-                    resume_incomplete=True  # Resume mode but with 0 incomplete chunks
+                    resume_incomplete=False  # Full reprocess, not resume
                 ))
             else:
                 # No progress file - normal reprocess

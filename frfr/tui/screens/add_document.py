@@ -53,13 +53,16 @@ class AddDocumentScreen(ModalScreen[Optional[list]]):
             yield Label(f"[bold cyan]Add Documents to Session[/bold cyan]")
             yield Static(f"\n[dim]Session: {self.session_id}[/dim]\n")
             yield Static("[bold]Enter PDF file paths to add:[/bold]")
-            yield Static("[dim]Press Tab for path autocomplete[/dim]")
+            yield Static("[dim]Press Tab for path autocomplete or use the Browse button[/dim]")
             yield Static("[dim]Examples:[/dim]")
             yield Static("[dim]  documents/report.pdf[/dim]")
             yield Static("[dim]  /absolute/path/to/file.pdf[/dim]")
             yield Static("[dim]  documents/*.pdf (glob pattern)[/dim]\n")
 
-            yield Label("PDF Files:")
+            with Horizontal():
+                yield Label("PDF Files:")
+                yield Button("Browse Files...", variant="default", id="browse-btn")
+
             yield PathInput(
                 placeholder="Enter file path or pattern...",
                 id="file-input-1"
@@ -91,10 +94,37 @@ class AddDocumentScreen(ModalScreen[Optional[list]]):
             self.action_cancel()
         elif event.button.id == "add-btn":
             self.action_add()
+        elif event.button.id == "browse-btn":
+            self.action_browse()
 
     def action_cancel(self) -> None:
         """Cancel the dialog."""
         self.dismiss(None)
+
+    def action_browse(self) -> None:
+        """Open file browser to select PDF files."""
+        from frfr.tui.screens.file_browser import FileBrowserScreen
+
+        def handle_file_selection(file_paths):
+            """Handle the file paths returned from the browser."""
+            if file_paths:
+                # Auto-populate the PathInput fields
+                for i, path in enumerate(file_paths[:3], start=1):
+                    try:
+                        file_input = self.query_one(f"#file-input-{i}", PathInput)
+                        file_input.value = path
+                    except Exception:
+                        # If we run out of input fields, that's okay
+                        break
+
+                # Show notification
+                self.app.notify(
+                    f"Selected {len(file_paths)} file{'s' if len(file_paths) != 1 else ''}",
+                    severity="success"
+                )
+
+        # Show the file browser dialog with callback
+        self.app.push_screen(FileBrowserScreen(), handle_file_selection)
 
     def action_add(self) -> None:
         """Add documents to the session."""
