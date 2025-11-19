@@ -59,6 +59,7 @@ class FactsBrowserScreen(Screen):
         self.all_facts: List[Dict[str, Any]] = []
         self.filtered_facts: List[Dict[str, Any]] = []
         self.selected_fact: Optional[Dict[str, Any]] = None
+        self._displayed_fact_index: Optional[int] = None  # Track index of currently displayed fact
         self._search_timer: Optional[Any] = None  # Debounce timer for search
         self._pending_search: str = ""  # Pending search term
 
@@ -192,21 +193,31 @@ class FactsBrowserScreen(Screen):
         else:
             self.filtered_facts = self.all_facts.copy()
 
-        # Refresh the list on main thread
-        self.call_from_thread(self.refresh_facts_list)
+        # Refresh the list
+        self.refresh_facts_list()
         self._search_timer = None
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         """Handle fact selection."""
         if isinstance(event.item, FactItem):
             self.selected_fact = event.item.fact
-            # Show fact detail
-            self.show_fact_detail()
+            # Show fact detail with the index
+            self.show_fact_detail(event.item.fact_index)
 
-    def show_fact_detail(self) -> None:
+    def show_fact_detail(self, fact_index: Optional[int] = None) -> None:
         """Show detailed view of the selected fact."""
         if not self.selected_fact:
             return
+
+        # Don't show the same fact again if it's already displayed
+        if fact_index is not None and fact_index == self._displayed_fact_index:
+            return
+
+        # Clear previous notifications before showing a new one
+        self.app.clear_notifications()
+
+        # Update the currently displayed fact index
+        self._displayed_fact_index = fact_index
 
         # Format fact details
         claim = self.selected_fact.get("claim", "No claim")
