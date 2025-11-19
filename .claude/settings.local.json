@@ -21,7 +21,10 @@
       "Bash(python:*)",
       "Bash(tee:*)",
       "Bash(./venv/bin/python:*)",
-      "Bash(chmod:*)"
+      "Bash(chmod:*)",
+      "Bash(./venv/bin/pip install:*)",
+      "Bash(./venv/bin/pytest tests/test_pdf_extraction.py -v)",
+      "Bash(./venv/bin/pytest tests/test_pdf_extraction.py::test_extract_google_docs_pdf -v)"
     ],
     "deny": [],
     "ask": []

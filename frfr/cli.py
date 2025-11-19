@@ -1476,9 +1476,12 @@ SOURCE REFERENCES:
 @main.command("process")
 @click.argument("pdf_paths", type=click.Path(exists=True), nargs=-1, required=True)
 @click.option("--session-id", help="Session ID (creates new if not provided)")
-@click.option("--chunk-size", default=50, help="Lines per chunk for fact extraction (default: 50)")
-@click.option("--overlap", default=10, help="Overlap lines between chunks (default: 10)")
+@click.option("--chunk-size", default=50, help="Lines per chunk - only used if --no-adaptive (default: 50)")
+@click.option("--overlap", default=10, help="Overlap lines - only used if --no-adaptive (default: 10)")
 @click.option("--max-workers", default=20, help="Maximum parallel Claude processes (default: 20)")
+@click.option("--no-adaptive", is_flag=True, help="Disable adaptive chunking (use fixed chunk-size)")
+@click.option("--min-chunk-chars", default=3000, help="Minimum characters per chunk for adaptive mode (default: 3000)")
+@click.option("--max-chunk-chars", default=8000, help="Maximum characters per chunk for adaptive mode (default: 8000)")
 @click.option("--multipass", is_flag=True, help="Enable multi-pass extraction")
 @click.option("--skip-validation", is_flag=True, help="Skip fact validation step")
 @click.option("--no-interactive", is_flag=True, help="Skip interactive mode (just process)")
@@ -1490,6 +1493,9 @@ def process_cmd(
     chunk_size: int,
     overlap: int,
     max_workers: int,
+    no_adaptive: bool,
+    min_chunk_chars: int,
+    max_chunk_chars: int,
     multipass: bool,
     skip_validation: bool,
     no_interactive: bool,
@@ -1613,13 +1619,21 @@ def process_cmd(
         # ========== STEP 2: Extract Facts ==========
         console.print(f"[bold cyan]Step 2/4: Extracting facts ({document_name})[/bold cyan]\n")
 
-        console.print(f"  Chunk size: {chunk_size} lines, Overlap: {overlap} lines")
+        # Show chunking strategy
+        adaptive_enabled = not no_adaptive
+        if adaptive_enabled:
+            console.print(f"  Adaptive chunking: {min_chunk_chars}-{max_chunk_chars} chars/chunk")
+        else:
+            console.print(f"  Fixed chunking: {chunk_size} lines/chunk, {overlap} lines overlap")
         console.print(f"  Workers: {max_workers}, Multipass: {multipass}")
 
         extractor = FactExtractor(
             chunk_size=chunk_size,
             overlap_size=overlap,
             max_workers=max_workers,
+            min_chunk_chars=min_chunk_chars,
+            max_chunk_chars=max_chunk_chars,
+            adaptive_chunking=adaptive_enabled,
         )
 
         # Calculate total chunks to provide better progress info

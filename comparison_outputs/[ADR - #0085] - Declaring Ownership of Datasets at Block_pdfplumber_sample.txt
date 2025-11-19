@@ -1,0 +1,100 @@
+ADR Content
+
+=== PAGE BREAK ===
+
+Declaring Ownership of Datasets at
+Block
+ADR - #0085
+Scope: Block
+Document Status: ✅ Accepted as of Jun 4, 2025
+Decision type: Unified (Pick one)
+ADR DRI Cameron Hotchkies He, Him)
+Sponsor: Mackenzie Shelley Diana Pojar
+Authors: Cameron Hotchkies He, Him) , Tim Smith
+DRI for Implementation: Cameron Hotchkies He, Him)
+Last Updated: Jun 4, 2025
+Related Docs:
+additional ownership reading
+Document Terminology
+A few uncommon terms are used throughout the document, please see the Document
+Glossary appendix to clear up ambiguity.
+Context
+Data is collected as a part of business1. Sometimes, the data Block relies on is inaccurate
+or missing. Downstream systems are dependent on data availability / accuracy. When
+accurate data is unavailable, it results in data outages, or even SEVs.
+1 Among other things, data is used to make critical business and product decisions, assess risk,
+and is also extensively utilized in our credit underwriting work.
+
+=== PAGE BREAK ===
+
+Data quality issues often arise due to no team being responsible for the quality of that
+data. In addition, when a SEV occurs due to data quality the reliant systems have no
+recourse.
+For additional context, see the ownership appendix.
+Tech Radar Changes
+No changes to the tech radar are currently proposed
+Blip Technology) Prior Status New Status Comment
+Select One Select One
+Decision
+Datasets must have ownership declared at a channel level at every point2 after
+collection/generation. Ownership must be the smallest set of people taking responsibility
+for that data. Data platforms are obligated to support and collaboratively propagate
+ownership3 metadata in all cases.
+The following sections will expand on the concepts. At its core the expectations are:
+● From the point of collection and/or generation, data has an attributable owning
+group
+● The size of the owning group is reasonable4
+● Assumption/transfer5 of ownership is done with the explicit knowledge of the
+previous owner
+2 Data ownership points here are tied to the movement of data, with an emphasis on when data
+moves from one medium to another, where ownership attribution is frequently dropped. There are
+clear times when ownership might change in the same medium, so there must be a way to record
+these virtual boundaries.
+3 To understand how ownership will work in practice, see Expectations of Dataset Owners.
+4 “Reasonableˮ is subjective, but ideally in the range of 3 <= x <= 20
+5 In this sense, “transferˮ refers to data earlier in a pipeline having a different owner than later in a
+pipeline. The change in team responsibilities should be obvious, and not require mutual
+participation.
+
+=== PAGE BREAK ===
+
+In the event Channel Ownership cannot apply
+Per-message (or Record level) ownership is an adequate stand-in6 for streaming systems
+where content is required to be interlaced, as long as there is a mechanism to separate7
+the interlaced stream at a later time.
+Channel Ownership
+Intermediate channels8 will have a clear set of owners identified. A set of owners would
+be small enough to be a single team, or service-owner group, but ideally below 20
+people.
+In the above illustration, one team (Team X) is responsible for the Carrot and Turnip
+services. They utilize a shared channel for communicating. In this example, Team X takes
+ownership of the data channel, but permits Team Z to publish as a collaborator.
+For subscribing, Team Y needs to get permission specifically from Team X. In the event
+of an outage, or other concern, Team Y as a consumer relies on Team X as the first point
+of contact.
+6 per-message / record-level is usually harder and requires more overhead, which is why channel
+level was considered good enough.
+7 The authors would strongly suggest that any at-rest scenario de-interlace separately owned
+content to avoid accidentally losing ownership information during a transformation.
+8 Think “kafka topicˮ, “snowflake tableˮ or anything a service puts data into. See Intermediate
+Channels
+
+=== PAGE BREAK ===
+
+Channel ownership with delegation
+In the above illustration, one team (Team X) is still ultimately responsible for the shared
+channel, and data content. In this example, Team X takes ownership of the data channel,
+but permits Team Z to both publish as a collaborator, and function as an administrative
+delegate.
+For subscribing, Team Y can get permission from Team X, or from Team Z as they now
+have the authority to make changes to the channel. In the event of a data outage, or other
+concern, Team Y as a consumer still relies on Team X as the first point of contact.
+Tracking Ownership
+The Data Governance Foundations team9 will identify localized locations where teams
+declared ownership of data, which will be mirrored in a centralized location10. By
+onboarding teams as owners of data, teams are more likely to monitor, and ensure the
+quality of data. In the event of an outage, there is a support mechanism for the affected
+services.
+9 Other teams are encouraged to collaborate in this process, but can defer the maintenance of a
+central pane of glass to the DGF team.
+10 At this point in time, it will by Acryl Datahub, but this ADR isnʼt tied to any specific vendor

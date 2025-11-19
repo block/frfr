@@ -38,23 +38,32 @@ class FactExtractor:
     def __init__(
         self,
         claude_command: str = "claude",
-        chunk_size: int = 50,
+        chunk_size: int = 50,  # Kept for backward compatibility, but adaptive mode preferred
         overlap_size: int = 10,
         max_workers: int = 20,
+        min_chunk_chars: int = 3000,  # Minimum characters per chunk for useful context
+        max_chunk_chars: int = 8000,  # Maximum characters per chunk to avoid token limits
+        adaptive_chunking: bool = True,  # Use smart adaptive chunking by default
     ):
         """
         Initialize fact extractor.
 
         Args:
             claude_command: Path to claude CLI command
-            chunk_size: Number of lines per chunk (default: 50)
-            overlap_size: Number of lines to overlap between chunks (default: 10)
-            max_workers: Maximum number of parallel Claude processes (default: 20)
+            chunk_size: Number of lines per chunk (legacy, used if adaptive_chunking=False)
+            overlap_size: Number of lines to overlap (legacy)
+            max_workers: Maximum number of parallel Claude processes
+            min_chunk_chars: Minimum characters per chunk for useful context (default: 3000)
+            max_chunk_chars: Maximum characters per chunk (default: 8000)
+            adaptive_chunking: Use smart adaptive chunking (default: True)
         """
         self.client = ClaudeClient(claude_command=claude_command)
         self.chunk_size = chunk_size
         self.overlap_size = overlap_size
         self.max_workers = max_workers
+        self.min_chunk_chars = min_chunk_chars
+        self.max_chunk_chars = max_chunk_chars
+        self.adaptive_chunking = adaptive_chunking
 
     def summarize_document(self, text: str, document_name: str) -> dict:
         """
@@ -164,7 +173,219 @@ RESPOND ONLY WITH VALID JSON:"""
 
     def chunk_text(self, text: str) -> List[tuple[int, str, int, int]]:
         """
-        Split text into overlapping chunks by lines.
+        Split text into overlapping chunks using adaptive strategy.
+
+        Uses character-based chunking with semantic boundary awareness:
+        - Minimum chunk size: ensures useful context
+        - Maximum chunk size: stays within LLM token limits
+        - Semantic boundaries: prefers PAGE BREAK markers, paragraphs
+        - Adaptive overlap: proportional to chunk size
+
+        Args:
+            text: Full document text
+
+        Returns:
+            List of (chunk_id, chunk_text, start_line, end_line) tuples
+        """
+        if self.adaptive_chunking:
+            return self._adaptive_chunk_text(text)
+        else:
+            # Legacy line-based chunking (backward compatibility)
+            return self._legacy_chunk_text(text)
+
+    def _adaptive_chunk_text(self, text: str) -> List[tuple[int, str, int, int]]:
+        """
+        Adaptive character-based chunking with semantic boundaries.
+
+        Strategy:
+        1. Calculate optimal chunk size based on document length
+        2. Split on semantic boundaries (PAGE BREAK > paragraphs > lines)
+        3. Ensure each chunk meets minimum size requirement
+        4. Add proportional overlap for context continuity
+        """
+        total_chars = len(text)
+        lines = text.split("\n")
+        total_lines = len(lines)
+
+        # Calculate optimal number of chunks
+        # Goal: chunks should be min_chunk_chars to max_chunk_chars
+        if total_chars <= self.min_chunk_chars:
+            # Document is small enough to process as one chunk
+            optimal_chunks = 1
+        else:
+            # Calculate chunks needed to meet minimum size
+            optimal_chunks = max(1, total_chars // self.max_chunk_chars)
+            if total_chars / optimal_chunks < self.min_chunk_chars:
+                # Reduce chunks to meet minimum size
+                optimal_chunks = max(1, total_chars // self.min_chunk_chars)
+
+        # Calculate target chunk size in characters
+        target_chunk_chars = total_chars // optimal_chunks
+        overlap_chars = max(200, target_chunk_chars // 10)  # 10% overlap, min 200 chars
+
+        logger.info(
+            f"Adaptive chunking: {total_chars} chars → {optimal_chunks} chunks "
+            f"(~{target_chunk_chars} chars/chunk, {overlap_chars} char overlap)"
+        )
+
+        # Try to split on PAGE BREAK markers first (best semantic boundary)
+        page_sections = text.split("\n\n=== PAGE BREAK ===\n\n")
+
+        if len(page_sections) > 1:
+            # Document has page breaks - use them as primary boundaries
+            chunks = self._chunk_by_pages(page_sections, target_chunk_chars, overlap_chars, lines)
+        else:
+            # No page breaks - chunk by characters with paragraph awareness
+            chunks = self._chunk_by_characters(text, target_chunk_chars, overlap_chars, lines)
+
+        logger.info(f"Split document into {len(chunks)} chunks (avg {total_chars // len(chunks)} chars/chunk)")
+        return chunks
+
+    def _chunk_by_pages(
+        self,
+        page_sections: List[str],
+        target_chunk_chars: int,
+        overlap_chars: int,
+        all_lines: List[str]
+    ) -> List[tuple[int, str, int, int]]:
+        """
+        Chunk document using PAGE BREAK markers as semantic boundaries.
+
+        Combines pages to meet target chunk size while respecting page boundaries.
+        """
+        chunks = []
+        chunk_id = 0
+        current_chunk_pages = []
+        current_chunk_size = 0
+
+        for page_num, page_content in enumerate(page_sections):
+            page_size = len(page_content)
+
+            # Add page to current chunk if it fits
+            if current_chunk_size == 0 or (current_chunk_size + page_size) < target_chunk_chars * 1.5:
+                current_chunk_pages.append(page_content)
+                current_chunk_size += page_size
+            else:
+                # Current chunk is large enough, save it
+                chunk_text = "\n\n=== PAGE BREAK ===\n\n".join(current_chunk_pages)
+                start_line, end_line = self._find_line_numbers(chunk_text, all_lines, chunk_id)
+                chunks.append((chunk_id, chunk_text, start_line, end_line))
+
+                # Start new chunk with overlap from last page
+                if overlap_chars > 0 and current_chunk_pages:
+                    # Keep last page as overlap
+                    current_chunk_pages = [current_chunk_pages[-1], page_content]
+                    current_chunk_size = len(current_chunk_pages[-2]) + page_size
+                else:
+                    current_chunk_pages = [page_content]
+                    current_chunk_size = page_size
+
+                chunk_id += 1
+
+        # Don't forget the last chunk
+        if current_chunk_pages:
+            chunk_text = "\n\n=== PAGE BREAK ===\n\n".join(current_chunk_pages)
+            start_line, end_line = self._find_line_numbers(chunk_text, all_lines, chunk_id)
+            chunks.append((chunk_id, chunk_text, start_line, end_line))
+
+        return chunks
+
+    def _chunk_by_characters(
+        self,
+        text: str,
+        target_chunk_chars: int,
+        overlap_chars: int,
+        all_lines: List[str]
+    ) -> List[tuple[int, str, int, int]]:
+        """
+        Chunk document by character count with paragraph awareness.
+
+        Falls back to this when no PAGE BREAK markers are found.
+        """
+        chunks = []
+        chunk_id = 0
+        position = 0
+        text_length = len(text)
+
+        while position < text_length:
+            # Calculate chunk end position
+            chunk_end = min(position + target_chunk_chars, text_length)
+
+            # Try to break at paragraph boundary (double newline)
+            if chunk_end < text_length:
+                # Look for paragraph break near target position
+                search_start = max(position, chunk_end - 500)
+                search_end = min(text_length, chunk_end + 500)
+                search_region = text[search_start:search_end]
+
+                para_break = search_region.find("\n\n")
+                if para_break != -1:
+                    # Found paragraph break, use it
+                    chunk_end = search_start + para_break + 2
+                else:
+                    # No paragraph break, try single newline
+                    newline = search_region.find("\n", len(search_region) // 2)
+                    if newline != -1:
+                        chunk_end = search_start + newline + 1
+
+            # Extract chunk
+            chunk_text = text[position:chunk_end]
+
+            # Find line numbers for this chunk
+            start_line, end_line = self._find_line_numbers(chunk_text, all_lines, chunk_id)
+            chunks.append((chunk_id, chunk_text, start_line, end_line))
+
+            chunk_id += 1
+            # Move forward with overlap
+            position = chunk_end - overlap_chars
+
+            # Prevent infinite loop
+            if position >= text_length:
+                break
+
+        return chunks
+
+    def _find_line_numbers(self, chunk_text: str, all_lines: List[str], chunk_id: int) -> tuple[int, int]:
+        """
+        Find approximate line numbers for a chunk in the original document.
+
+        Args:
+            chunk_text: The chunk text
+            all_lines: All lines from the original document
+            chunk_id: Chunk identifier
+
+        Returns:
+            tuple of (start_line, end_line) - 1-indexed
+        """
+        chunk_lines = chunk_text.split("\n")
+        chunk_line_count = len(chunk_lines)
+
+        # For first chunk, start at line 1
+        if chunk_id == 0:
+            return 1, chunk_line_count
+
+        # For subsequent chunks, make a best-effort estimate
+        # This is approximate since we're chunking by characters not lines
+        try:
+            # Try to find first non-empty line of chunk in the document
+            for chunk_line in chunk_lines[:5]:
+                if chunk_line.strip():
+                    for idx, doc_line in enumerate(all_lines):
+                        if doc_line.strip() == chunk_line.strip():
+                            start_line = idx + 1
+                            end_line = min(start_line + chunk_line_count - 1, len(all_lines))
+                            return start_line, end_line
+        except:
+            pass
+
+        # Fallback: estimate based on chunk ID
+        estimated_start = chunk_id * 50 + 1  # Rough estimate
+        estimated_end = min(estimated_start + chunk_line_count, len(all_lines))
+        return estimated_start, estimated_end
+
+    def _legacy_chunk_text(self, text: str) -> List[tuple[int, str, int, int]]:
+        """
+        Legacy line-based chunking (backward compatibility).
 
         Args:
             text: Full document text
@@ -192,8 +413,29 @@ RESPOND ONLY WITH VALID JSON:"""
             if end >= len(lines):
                 break
 
-        logger.info(f"Split document into {len(chunks)} chunks")
+        logger.info(f"Legacy chunking: split into {len(chunks)} chunks")
         return chunks
+
+    def get_optimal_workers(self, num_chunks: int) -> int:
+        """
+        Calculate optimal number of workers based on chunk count.
+
+        No point having 20 workers for 5 chunks.
+
+        Args:
+            num_chunks: Number of chunks to process
+
+        Returns:
+            Optimal worker count (between 1 and max_workers)
+        """
+        if num_chunks <= 1:
+            return 1
+        elif num_chunks <= 5:
+            return min(num_chunks, 5)
+        elif num_chunks <= 10:
+            return min(num_chunks, 8)
+        else:
+            return min(num_chunks, self.max_workers)
 
     def _extract_facts_with_retry(
         self,
@@ -1722,6 +1964,24 @@ Extract all {pass_type} facts. RESPOND ONLY WITH A VALID JSON ARRAY:"""
         logger.info("Step 2: Chunking document")
         chunks = self.chunk_text(text)
 
+        # Step 2.5: Initialize progress tracking IMMEDIATELY after chunking
+        # This ensures the progress file is updated with correct chunk count before TUI polls it
+        from frfr.progress import ProgressTracker, ProcessingStage, get_incomplete_chunks, get_progress_summary
+        progress_tracker = ProgressTracker(session.session_dir, document_name)
+
+        # Check existing progress for chunk count changes (EARLY detection)
+        existing_progress = progress_tracker.load()
+        if existing_progress and 'total' in existing_progress:
+            old_chunk_count = existing_progress.get('total', 0)
+            new_chunk_count = len(chunks)
+
+            if old_chunk_count != new_chunk_count:
+                logger.warning(f"⚠️  Chunk count changed: {old_chunk_count} → {new_chunk_count}")
+                logger.warning("Invalidating old progress due to chunking algorithm update")
+                # Force reinitialize NOW before TUI polls
+                progress_tracker.initialize(len(chunks))
+                logger.info(f"✓ Progress reinitialized with {new_chunk_count} chunks")
+
         # Check for resume mode or chunk range
         if start_chunk > 0 or end_chunk is not None:
             chunk_range_desc = f"chunks {start_chunk}"
@@ -1737,10 +1997,6 @@ Extract all {pass_type} facts. RESPOND ONLY WITH A VALID JSON ARRAY:"""
         # Step 3: Create validator for fact checking (with recovery support)
         logger.info("Step 3: Initializing fact validator with recovery support")
         validator = FactValidator(text_file, claude_client=self.client)
-
-        # Step 3.5: Initialize progress tracking
-        from frfr.progress import ProgressTracker, ProcessingStage, get_incomplete_chunks, get_progress_summary
-        progress_tracker = ProgressTracker(session.session_dir, document_name)
 
         # Handle resume incomplete mode
         incomplete_chunk_ids = []
@@ -1762,12 +2018,13 @@ Extract all {pass_type} facts. RESPOND ONLY WITH A VALID JSON ARRAY:"""
                 logger.info("No existing progress found - will process all chunks")
                 progress_tracker.initialize(len(chunks))
         else:
-            # Normal mode - initialize fresh or load existing
+            # Normal mode - initialize if needed (early check already handled chunk count changes)
             existing_progress = progress_tracker.load()
             if not existing_progress:
                 progress_tracker.initialize(len(chunks))
+                logger.info(f"✓ Initialized progress tracking for {len(chunks)} chunks")
 
-        logger.info(f"Initialized progress tracking for {len(chunks)} chunks")
+        logger.info(f"Progress tracking ready: {len(chunks)} chunks")
 
         # Step 4: Extract and validate facts from each chunk (in parallel)
         if resume_incomplete and incomplete_chunk_ids:
@@ -1783,8 +2040,14 @@ Extract all {pass_type} facts. RESPOND ONLY WITH A VALID JSON ARRAY:"""
         else:
             chunks_to_process = [c for c in chunks if c[0] >= start_chunk]
 
+        # Calculate optimal worker count for this batch
+        optimal_workers = self.get_optimal_workers(len(chunks_to_process)) if chunks_to_process else 1
+
         if chunks_to_process:
-            logger.info(f"Step 4: Extracting and validating facts from {len(chunks_to_process)} chunks (max {self.max_workers} parallel)")
+            logger.info(
+                f"Step 4: Extracting and validating facts from {len(chunks_to_process)} chunks "
+                f"(using {optimal_workers} parallel workers)"
+            )
         else:
             logger.info(f"Step 4: No chunks to process")
         all_facts = []
@@ -1803,10 +2066,10 @@ Extract all {pass_type} facts. RESPOND ONLY WITH A VALID JSON ARRAY:"""
                 all_facts.append(ExtractedFact(**fact_dict))
             logger.info(f"Loaded {len(all_facts)} existing facts")
 
-        # Process chunks in parallel
+        # Process chunks in parallel with optimal worker count
         chunk_results = {}  # chunk_id -> (facts, stats)
 
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+        with ThreadPoolExecutor(max_workers=optimal_workers) as executor:
             # Submit all chunks
             future_to_chunk = {}
             for chunk_info in chunks_to_process:

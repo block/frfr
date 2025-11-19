@@ -124,8 +124,7 @@ class ProcessingScreen(Screen):
             # Add enrichment flags for better quality
             cmd.append("--multipass")  # Enable multi-pass extraction (CUECs, tests, quantitative, technical)
             cmd.extend(["--max-workers", "20"])  # Use more workers for faster processing
-            cmd.extend(["--chunk-size", "50"])  # Standard chunk size
-            cmd.extend(["--overlap", "10"])  # Standard overlap
+            # Use adaptive chunking (default) - removes --chunk-size and --overlap to enable it
             cmd.append("--no-interactive")  # Don't enter interactive mode
 
             if self.resume_incomplete:
@@ -133,8 +132,8 @@ class ProcessingScreen(Screen):
 
             log.write("[cyan]Using enriched extraction settings:[/cyan]")
             log.write("[dim]  • Multi-pass extraction enabled[/dim]")
-            log.write("[dim]  • 20 parallel workers[/dim]")
-            log.write("[dim]  • 50-line chunks with 10-line overlap[/dim]")
+            log.write("[dim]  • 20 parallel workers (auto-optimized per document)[/dim]")
+            log.write("[dim]  • Adaptive chunking (3k-8k chars/chunk, semantic boundaries)[/dim]")
             if self.resume_incomplete:
                 log.write("[dim]  • Resume mode: processing incomplete chunks only[/dim]")
             log.write("\n")
@@ -180,12 +179,18 @@ class ProcessingScreen(Screen):
 
                         # Look for total chunks: "Document: X lines → Y chunks"
                         total_chunks_match = re.search(r'(\d+)\s+chunks', line_text)
-                        if total_chunks_match and self.total_chunks is None:
-                            self.total_chunks = int(total_chunks_match.group(1))
-                            log.write(f"[cyan]Document split into {self.total_chunks} chunks[/cyan]")
-                            # Update chunk info display
-                            chunk_info = self.query_one("#chunk-info", Static)
-                            chunk_info.update(f"[cyan]Chunks: 0/{self.total_chunks} (0%)[/cyan]")
+                        if total_chunks_match:
+                            new_chunk_count = int(total_chunks_match.group(1))
+
+                            # Always update if we see a new chunk count (handles algorithm changes)
+                            if self.total_chunks != new_chunk_count:
+                                if self.total_chunks is not None:
+                                    log.write(f"[yellow]⚠️  Chunk count changed: {self.total_chunks} → {new_chunk_count}[/yellow]")
+                                self.total_chunks = new_chunk_count
+                                log.write(f"[cyan]Document split into {self.total_chunks} chunks[/cyan]")
+                                # Update chunk info display
+                                chunk_info = self.query_one("#chunk-info", Static)
+                                chunk_info.update(f"[cyan]Chunks: 0/{self.total_chunks} (0%)[/cyan]")
 
                         # Look for chunk completion: "Chunk X/Y • Z facts extracted" or "Completed chunk X/Y"
                         chunk_progress_match = re.search(r'[Cc]hunk\s+(\d+)/(\d+)', line_text)
@@ -391,8 +396,20 @@ class ProcessingScreen(Screen):
 
             # Update chunk info
             completed = stage_counts.get("completed", 0)
-            total = progress.total_chunks
-            self.total_chunks = total
+            total_from_progress = progress.total_chunks
+
+            # Only update total_chunks if we haven't seen a newer value from logs
+            # (Logs parsing takes precedence over progress file to handle chunking changes)
+            if self.total_chunks is None:
+                # First time - use progress file value
+                self.total_chunks = total_from_progress
+            elif total_from_progress != self.total_chunks:
+                # Mismatch - prefer the value from logs if we've seen one
+                # But if total_from_progress is smaller (chunking improved), use it
+                if total_from_progress < self.total_chunks:
+                    log.write(f"[yellow]Updating to new chunk count from progress: {total_from_progress}[/yellow]")
+                    self.total_chunks = total_from_progress
+
             self.current_chunk = completed
 
             # Calculate total facts from progress
