@@ -1,0 +1,26 @@
+#!/bin/bash
+# frfr - High-confidence document Q&A using LLM swarm consensus
+# This script activates the virtual environment and launches the frfr TUI
+
+# Get the directory where this script lives
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+
+# Path to the virtual environment
+VENV_PATH="$PROJECT_ROOT/venv"
+
+# Check if venv exists
+if [ ! -d "$VENV_PATH" ]; then
+    echo "Error: Virtual environment not found at $VENV_PATH"
+    echo "Please create a virtual environment first:"
+    echo "  python -m venv venv"
+    echo "  source venv/bin/activate"
+    echo "  pip install -e ."
+    exit 1
+fi
+
+# Source the virtual environment
+source "$VENV_PATH/bin/activate"
+
+# Launch the frfr TUI
+python -m frfr.cli "$@"

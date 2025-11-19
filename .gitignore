@@ -41,15 +41,15 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# Session data
+# Session data (moved to ~/Documents/frfr/)
 sessions/*/
 !sessions/.gitkeep
 .frfr_sessions/
 
-# Input/Output directories
+# Input directory (moved to ~/Documents/frfr/)
 inputs/
-outputs/
 
-# Legacy output directory
+# Legacy directories
 output/
+outputs/
 documents/

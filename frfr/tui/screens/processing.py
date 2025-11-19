@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional, List
 
 from textual.app import ComposeResult
+from frfr.config import default_config
 from textual.screen import Screen
 from textual.widgets import Static, ProgressBar, Label, RichLog, LoadingIndicator
 from textual.containers import Container, Vertical, Horizontal
@@ -367,7 +368,7 @@ class ProcessingScreen(Screen):
         try:
             from frfr.progress import get_all_progress
 
-            session_dir = Path(".frfr_sessions") / self.session_id
+            session_dir = Path(default_config.session_storage_dir) / self.session_id
             all_progress = get_all_progress(session_dir)
 
             if all_progress:

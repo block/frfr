@@ -24,7 +24,13 @@
       "Bash(chmod:*)",
       "Bash(./venv/bin/pip install:*)",
       "Bash(./venv/bin/pytest tests/test_pdf_extraction.py -v)",
-      "Bash(./venv/bin/pytest tests/test_pdf_extraction.py::test_extract_google_docs_pdf -v)"
+      "Bash(./venv/bin/pytest tests/test_pdf_extraction.py::test_extract_google_docs_pdf -v)",
+      "Bash(FRFR_DATA_DIR=\"/tmp/frfr_test\" python3:*)",
+      "Bash(mkdir:*)",
+      "Bash(./bin/frfr:*)",
+      "Bash(find:*)",
+      "Bash(test:*)",
+      "Bash(osascript:*)"
     ],
     "deny": [],
     "ask": []

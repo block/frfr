@@ -207,8 +207,18 @@ class ProgressTracker:
         if not self.progress:
             return
 
-        # Ensure session directory exists
-        self.session_dir.mkdir(parents=True, exist_ok=True)
+        # Ensure session directory exists (with retry for race conditions)
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                self.session_dir.mkdir(parents=True, exist_ok=True)
+                break
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    import logging
+                    logging.warning(f"Failed to create session directory after {max_retries} attempts: {e}")
+                    return
+                time.sleep(0.1)  # Brief wait before retry
 
         # Convert to dict
         data = {
@@ -225,30 +235,57 @@ class ProgressTracker:
 
         # Use a lock file to prevent concurrent writes from parallel workers
         lock_file_path = self.progress_file.with_suffix(".lock")
+        temp_file = self.progress_file.with_suffix(".tmp")
+        lock_file = None
 
         try:
-            # Acquire exclusive lock
-            with open(lock_file_path, "w") as lock_file:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            # Acquire exclusive lock with timeout to prevent deadlocks
+            lock_file = open(lock_file_path, "w")
 
+            # Try to acquire lock with timeout
+            max_lock_wait = 10  # seconds
+            lock_acquired = False
+            start_time = time.time()
+
+            while not lock_acquired and (time.time() - start_time) < max_lock_wait:
                 try:
-                    # Write to temp file then atomically replace
-                    temp_file = self.progress_file.with_suffix(".tmp")
-                    with open(temp_file, "w") as f:
-                        json.dump(data, f, indent=2)
-                        f.flush()
-                        os.fsync(f.fileno())  # Force write to disk
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    lock_acquired = True
+                except BlockingIOError:
+                    # Lock held by another process, wait briefly and retry
+                    time.sleep(0.1)
 
-                    # Atomic replace
+            if not lock_acquired:
+                import logging
+                logging.warning(f"Could not acquire lock for progress file after {max_lock_wait}s, skipping save")
+                return
+
+            try:
+                # Write to temp file then atomically replace
+                # Ensure parent directory still exists (might have been deleted by another process)
+                temp_file.parent.mkdir(parents=True, exist_ok=True)
+
+                with open(temp_file, "w") as f:
+                    json.dump(data, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())  # Force write to disk
+
+                # Atomic replace - temp file should exist now
+                if temp_file.exists():
                     temp_file.replace(self.progress_file)
+                else:
+                    import logging
+                    logging.warning(f"Temp file disappeared before replace: {temp_file}")
 
-                finally:
-                    # Release lock
+            finally:
+                # Release lock
+                try:
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                except:
+                    pass
 
         except Exception as e:
             # Clean up temp file on error
-            temp_file = self.progress_file.with_suffix(".tmp")
             if temp_file.exists():
                 try:
                     temp_file.unlink()
@@ -258,7 +295,13 @@ class ProgressTracker:
             import logging
             logging.warning(f"Failed to save progress file: {e}")
         finally:
-            # Clean up lock file
+            # Close and clean up lock file
+            if lock_file:
+                try:
+                    lock_file.close()
+                except:
+                    pass
+
             if lock_file_path.exists():
                 try:
                     lock_file_path.unlink()

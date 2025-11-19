@@ -1,7 +1,21 @@
 """Configuration management for Frfr."""
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
+
+
+def get_data_dir() -> str:
+    """Get the base data directory for frfr.
+
+    Respects FRFR_DATA_DIR environment variable for custom locations.
+    Defaults to ~/Documents/frfr for cross-platform, user-visible storage.
+    """
+    data_dir = os.environ.get("FRFR_DATA_DIR")
+    if data_dir:
+        return str(Path(data_dir).expanduser())
+    return str(Path("~/Documents/frfr").expanduser())
 
 
 @dataclass
@@ -30,9 +44,10 @@ class FrfrConfig:
     temporal_task_queue: str = "frfr-tasks"
 
     # Storage
-    session_storage_dir: str = ".frfr_sessions"
-    inputs_dir: str = "inputs"
-    outputs_dir: str = "outputs"
+    session_storage_dir: str = field(
+        default_factory=lambda: os.path.join(get_data_dir(), "sessions")
+    )
+    inputs_dir: str = field(default_factory=lambda: os.path.join(get_data_dir(), "inputs"))
 
     # API configuration (assumes pre-configured environment)
     anthropic_api_key: Optional[str] = None  # Falls back to ANTHROPIC_API_KEY env var

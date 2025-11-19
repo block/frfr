@@ -1,10 +1,12 @@
 """Global state management for the TUI application."""
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
+from frfr.config import get_data_dir
 from frfr.session import Session
 
 
@@ -120,7 +122,9 @@ class AppState:
     current_session_info: Optional[SessionInfo] = None
 
     # Storage
-    session_storage_dir: Path = field(default_factory=lambda: Path(".frfr_sessions"))
+    session_storage_dir: Path = field(
+        default_factory=lambda: Path(os.path.join(get_data_dir(), "sessions"))
+    )
 
     # Query history
     query_history: List[str] = field(default_factory=list)

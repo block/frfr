@@ -52,17 +52,15 @@ def extract(pdf_path: str, output_path: str, min_text_threshold: int, save_metad
     Extract text from a PDF file.
 
     PDF_PATH: Path to the input PDF file
-    OUTPUT_PATH: (Optional) Path to save the extracted text file. Defaults to outputs/<filename>_text.txt
+    OUTPUT_PATH: (Optional) Path to save the extracted text file. Defaults to <filename>_text.txt in current directory
     """
     console.print("\n[bold blue]📄 PDF Text Extraction[/bold blue]\n")
 
     pdf_path = Path(pdf_path)
 
-    # Default output path to outputs/ directory
+    # Default output path to current directory
     if output_path is None:
-        outputs_dir = Path(default_config.outputs_dir)
-        outputs_dir.mkdir(parents=True, exist_ok=True)
-        output_path = outputs_dir / f"{pdf_path.stem}_text.txt"
+        output_path = Path(f"{pdf_path.stem}_text.txt")
     else:
         output_path = Path(output_path)
 
@@ -209,13 +207,8 @@ def extract_facts_cmd(
             session_id = Session.generate_session_id([document_name], use_llm=True)
         console.print(f"[green]✓[/green] Generated session name: [cyan]{session_id}[/cyan]")
 
-    # Create session with config
-    session = Session(
-        session_id=session_id,
-        base_dir=default_config.session_storage_dir,
-        inputs_dir=default_config.inputs_dir,
-        outputs_dir=default_config.outputs_dir,
-    )
+    # Create session
+    session = Session(session_id=session_id)
     console.print(f"[green]✓[/green] Session: [cyan]{session.session_id}[/cyan]")
     console.print(f"  Directory: [dim]{session.session_dir}[/dim]\n")
 
@@ -320,10 +313,8 @@ def extract_facts_cmd(
             "total_facts": len(facts_list),
         }
 
-        # Save to outputs directory
-        output_dir = Path(default_config.outputs_dir)
-        output_dir.mkdir(exist_ok=True)
-        output_file = output_dir / f"{document_name}_facts.json"
+        # Save to session directory
+        output_file = session.session_dir / "consolidated_facts.json"
 
         import json
         with open(output_file, "w") as f:
@@ -721,8 +712,10 @@ def session_info_cmd(session_id: str, document_name: str):
         console.print(f"  Completed: [dim]{session.metadata.get('completed_at')}[/dim]")
     console.print()
 
-    # Get documents
-    docs = session.metadata.get("documents", [])
+    # Get documents from document_registry (new format) or documents list (legacy)
+    document_registry = session.metadata.get("document_registry", {})
+    docs = list(document_registry.keys()) if document_registry else session.metadata.get("documents", [])
+
     if document_name:
         if document_name not in docs:
             console.print(f"[red]✗ Document '{document_name}' not found in session[/red]")
@@ -968,19 +961,16 @@ def query_cmd(facts_file: str, question: str, interactive: bool, show_facts: boo
         if source_doc_name:
             # Use source_doc name from facts
             base_name = Path(source_doc_name).stem
-            outputs_dir = default_config.outputs_dir
             search_patterns = [
-                f"{outputs_dir}/{base_name}*.txt",
-                f"{outputs_dir}/*{base_name}*.txt",
-                f"{base_name}*.txt",
+                f"{base_name}*.txt",  # Current directory
+                f"*{base_name}*.txt",
             ]
 
         # Also try pattern matching facts filename
         facts_base = facts_path.stem.replace("_facts", "").replace("_qv_tagged", "").replace("_filtered", "")
-        outputs_dir = default_config.outputs_dir
         search_patterns.extend([
-            f"{outputs_dir}/{facts_base}*.txt",
-            f"{outputs_dir}/*{facts_base}*.txt",
+            f"{facts_base}*.txt",  # Current directory
+            f"*{facts_base}*.txt",
         ])
 
         # Search for source text file
@@ -992,7 +982,7 @@ def query_cmd(facts_file: str, question: str, interactive: bool, show_facts: boo
 
         if not source_text_path:
             console.print("[yellow]⚠ Warning: Could not find source text file automatically[/yellow]")
-            console.print(f"[dim]Searched for patterns like: {default_config.outputs_dir}/{{document_name}}*.txt[/dim]")
+            console.print(f"[dim]Searched for patterns like: {{document_name}}*.txt[/dim]")
             console.print("[yellow]Continuing without deep search context...[/yellow]\n")
         else:
             try:
@@ -1523,7 +1513,7 @@ SOURCE REFERENCES:
 
 
 @main.command("process")
-@click.argument("pdf_paths", type=click.Path(exists=True), nargs=-1, required=True)
+@click.argument("file_paths", type=click.Path(exists=True), nargs=-1, required=True)
 @click.option("--session-id", help="Session ID (creates new if not provided)")
 @click.option("--chunk-size", default=50, help="Lines per chunk - only used if --no-adaptive (default: 50)")
 @click.option("--overlap", default=10, help="Overlap lines - only used if --no-adaptive (default: 10)")
@@ -1537,7 +1527,7 @@ SOURCE REFERENCES:
 @click.option("--show-facts", is_flag=True, help="Show supporting facts in interactive mode")
 @click.option("--resume-incomplete", is_flag=True, help="Resume processing by only processing incomplete chunks")
 def process_cmd(
-    pdf_paths: tuple,
+    file_paths: tuple,
     session_id: str,
     chunk_size: int,
     overlap: int,
@@ -1552,25 +1542,25 @@ def process_cmd(
     resume_incomplete: bool,
 ):
     """
-    Process PDF(s) from start to finish: extract text, extract facts, validate, and query.
+    Process document(s) from start to finish: extract text, extract facts, validate, and query.
 
-    PDF_PATHS: One or more paths to PDF files
+    FILE_PATHS: One or more paths to PDF, TXT, or Markdown files
 
     This supercommand combines all steps:
-    1. Extract PDF to text (creates symlink in inputs/)
+    1. Extract/read text from document (creates symlink in inputs/)
     2. Extract facts using LLM
     3. Validate facts against source
     4. Launch interactive query mode
 
     Example:
         frfr process documents/soc2_report.pdf
-        frfr process documents/report1.pdf documents/report2.pdf --multipass
+        frfr process documents/report.md documents/notes.txt --multipass
     """
     console.print("\n[bold blue]🚀 Frfr Complete Processing Pipeline[/bold blue]\n")
 
     # Generate session ID from document names if not provided
     if session_id is None:
-        document_names = [Path(p).stem for p in pdf_paths]
+        document_names = [Path(p).stem for p in file_paths]
         console.print(f"[dim]Generating session name from documents: {', '.join(document_names)}[/dim]")
 
         with console.status("[bold green]Generating session name..."):
@@ -1578,28 +1568,23 @@ def process_cmd(
 
         console.print(f"[green]✓[/green] Generated session name: [cyan]{session_id}[/cyan]\n")
 
-    # Create session with config
-    session = Session(
-        session_id=session_id,
-        base_dir=default_config.session_storage_dir,
-        inputs_dir=default_config.inputs_dir,
-        outputs_dir=default_config.outputs_dir,
-    )
+    # Create session
+    session = Session(session_id=session_id)
     console.print(f"[green]✓[/green] Session: [cyan]{session.session_id}[/cyan]")
     console.print(f"  Directory: [dim]{session.session_dir}[/dim]\n")
 
-    # Process each PDF
+    # Process each document
     all_documents = []
-    for pdf_path_str in pdf_paths:
-        pdf_path = Path(pdf_path_str)
-        document_name = pdf_path.stem
+    for file_path_str in file_paths:
+        file_path = Path(file_path_str)
+        document_name = file_path.stem
 
-        console.print(f"[bold blue]Processing: {pdf_path.name}[/bold blue]\n")
+        console.print(f"[bold blue]Processing: {file_path.name}[/bold blue]\n")
 
         # Add document to session (creates symlink)
         try:
             with console.status("[bold green]Registering document..."):
-                doc_info = session.add_document(str(pdf_path), document_name)
+                doc_info = session.add_document(str(file_path), document_name)
 
             console.print(f"[green]✓[/green] Document registered: [cyan]{document_name}[/cyan]")
             console.print(f"  Symlink: [dim]{doc_info['symlink_path']}[/dim]")
@@ -1622,10 +1607,10 @@ def process_cmd(
         # Update document status
         session.update_document_status(document_name, "processing")
 
-        # ========== STEP 1: Extract PDF to Text ==========
+        # ========== STEP 1: Extract/Copy Text ==========
         # Skip if resuming and text file already exists
         if resume_incomplete and text_file.exists():
-            console.print(f"[bold cyan]Step 1/4: PDF text (using existing)[/bold cyan]\n")
+            console.print(f"[bold cyan]Step 1/4: Text extraction (using existing)[/bold cyan]\n")
             console.print(f"[green]✓[/green] Text file already exists: [cyan]{text_file}[/cyan]")
 
             # Get file size/lines for info
@@ -1634,36 +1619,63 @@ def process_cmd(
                 line_count = len(text_content.split('\n'))
                 char_count = len(text_content)
             console.print(f"[green]✓[/green] {char_count:,} characters, {line_count:,} lines")
-            console.print(f"[yellow]⚠[/yellow]  Skipping PDF extraction (resume mode)\n")
+            console.print(f"[yellow]⚠[/yellow]  Skipping extraction (resume mode)\n")
         else:
-            console.print(f"[bold cyan]Step 1/4: Extracting PDF text ({document_name})[/bold cyan]\n")
+            # Check if file is text-based or PDF
+            file_extension = file_path.suffix.lower()
+            is_text_file = file_extension in {'.txt', '.md', '.markdown'}
 
-            try:
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[progress.description]{task.description}"),
-                    console=console,
-                ) as progress:
-                    progress.add_task("Analyzing PDF...", total=None)
-                    info = get_pdf_info(pdf_path)
+            if is_text_file:
+                # Direct text file - just read and copy
+                console.print(f"[bold cyan]Step 1/4: Reading text file ({document_name})[/bold cyan]\n")
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        text_content = f.read()
 
-                console.print(f"[green]✓[/green] PDF: [cyan]{pdf_path.name}[/cyan] ({info['pages']} pages)")
+                    # Write to session text file
+                    with open(text_file, 'w', encoding='utf-8') as f:
+                        f.write(text_content)
 
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[progress.description]{task.description}"),
-                    console=console,
-                ) as progress:
-                    progress.add_task(f"Extracting text from {info['pages']} pages...", total=None)
-                    result = extract_pdf_to_text(pdf_path=pdf_path, output_path=text_file)
+                    char_count = len(text_content)
+                    line_count = len(text_content.split('\n'))
 
-                console.print(f"[green]✓[/green] Extracted {result['total_chars']:,} characters using {result['method']}")
-                console.print(f"[dim]  → {text_file}[/dim]\n")
+                    console.print(f"[green]✓[/green] Read {char_count:,} characters, {line_count:,} lines")
+                    console.print(f"[dim]  → {text_file}[/dim]\n")
 
-            except Exception as e:
-                console.print(f"[red]✗ PDF extraction failed: {e}[/red]\n")
-                session.update_document_status(document_name, "failed", error_message=str(e))
-                sys.exit(1)
+                except Exception as e:
+                    console.print(f"[red]✗ Text file read failed: {e}[/red]\n")
+                    session.update_document_status(document_name, "failed", error_message=str(e))
+                    sys.exit(1)
+            else:
+                # PDF file - extract text
+                console.print(f"[bold cyan]Step 1/4: Extracting PDF text ({document_name})[/bold cyan]\n")
+
+                try:
+                    with Progress(
+                        SpinnerColumn(),
+                        TextColumn("[progress.description]{task.description}"),
+                        console=console,
+                    ) as progress:
+                        progress.add_task("Analyzing PDF...", total=None)
+                        info = get_pdf_info(file_path)
+
+                    console.print(f"[green]✓[/green] PDF: [cyan]{file_path.name}[/cyan] ({info['pages']} pages)")
+
+                    with Progress(
+                        SpinnerColumn(),
+                        TextColumn("[progress.description]{task.description}"),
+                        console=console,
+                    ) as progress:
+                        progress.add_task(f"Extracting text from {info['pages']} pages...", total=None)
+                        result = extract_pdf_to_text(pdf_path=file_path, output_path=text_file)
+
+                    console.print(f"[green]✓[/green] Extracted {result['total_chars']:,} characters using {result['method']}")
+                    console.print(f"[dim]  → {text_file}[/dim]\n")
+
+                except Exception as e:
+                    console.print(f"[red]✗ PDF extraction failed: {e}[/red]\n")
+                    session.update_document_status(document_name, "failed", error_message=str(e))
+                    sys.exit(1)
 
         # ========== STEP 2: Extract Facts ==========
         console.print(f"[bold cyan]Step 2/4: Extracting facts ({document_name})[/bold cyan]\n")

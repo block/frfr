@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from textual.app import ComposeResult
+from frfr.config import default_config
 from textual.screen import Screen
 from textual.widgets import Static, Input, Select, ListView, ListItem, Label
 from textual.containers import Container, Vertical, Horizontal, ScrollableContainer
@@ -104,7 +105,7 @@ class FactsBrowserScreen(Screen):
 
     def load_facts(self) -> None:
         """Load facts from the session."""
-        session_dir = Path(".frfr_sessions") / self.session_id
+        session_dir = Path(default_config.session_storage_dir) / self.session_id
 
         # Load facts from session metadata
         metadata_file = session_dir / "metadata.json"

@@ -988,8 +988,17 @@ def validate_consolidated_facts(
         facts = doc_data.get("facts", [])
         all_facts.extend(facts)
 
+    # Create Claude client for recovery/enrichment
+    try:
+        from frfr.extraction.claude_client import ClaudeClient
+        claude_client = ClaudeClient()
+        logger.info("ClaudeClient initialized for fact recovery/enrichment")
+    except Exception as e:
+        logger.warning(f"Failed to initialize ClaudeClient: {e}. Recovery will be disabled.")
+        claude_client = None
+
     # Create validator and validate
-    validator = FactValidator(text_file)
+    validator = FactValidator(text_file, claude_client=claude_client)
     results = validator.validate_facts(all_facts)
 
     # Calculate stats

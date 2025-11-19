@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from textual.app import ComposeResult
+from frfr.config import default_config
 from textual.screen import Screen
 from textual.widgets import Static, DataTable, Label
 from textual.containers import Container, Vertical, Horizontal
@@ -238,7 +239,7 @@ class SessionDetailScreen(Screen):
             doc_name = Path(original_pdf_path).name if isinstance(original_pdf_path, str) else "document"
 
             # Check for incomplete chunks
-            session_dir = Path(".frfr_sessions") / self.session_info.session_id
+            session_dir = Path(default_config.session_storage_dir) / self.session_info.session_id
             progress_summary = get_progress_summary(session_dir, doc_key)
 
             if progress_summary and progress_summary["incomplete"] > 0:

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from textual.app import ComposeResult
+from frfr.config import default_config
 from textual.screen import Screen
 from textual.widgets import Static, ProgressBar, Label, RichLog, LoadingIndicator
 from textual.containers import Container, Vertical, Horizontal
@@ -86,7 +87,7 @@ class RecoveryScreen(Screen):
 
         try:
             # Find the consolidated facts file and text file
-            session_dir = Path(".frfr_sessions") / self.session_id
+            session_dir = Path(default_config.session_storage_dir) / self.session_id
             metadata_file = session_dir / "metadata.json"
 
             if not metadata_file.exists():
@@ -245,7 +246,7 @@ class RecoveryScreen(Screen):
         try:
             from frfr.progress import get_document_progress
 
-            session_dir = Path(".frfr_sessions") / self.session_id
+            session_dir = Path(default_config.session_storage_dir) / self.session_id
 
             # If specific document, check its progress
             if self.document_name:

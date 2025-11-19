@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from textual.app import ComposeResult
+from frfr.config import default_config
 from textual.screen import Screen
 from textual.widgets import Static, Input, Button, RichLog, Label, LoadingIndicator, ProgressBar
 from textual.containers import Container, Vertical, Horizontal
@@ -87,7 +88,7 @@ class QueryScreen(Screen):
         self.current_query: str = ""  # Track current query for conversation history
 
         # Initialize ChunkManager for context-aware responses
-        session_path = Path(".frfr_sessions") / session_id
+        session_path = Path(default_config.session_storage_dir) / session_id
         self.chunk_manager = ChunkManager(session_path)
         self.current_chunks: List[ChunkWithEvidence] = []  # Track chunks used in current response
         self.current_facts: List[Dict] = []  # Track facts for interactive clicking
@@ -144,8 +145,8 @@ class QueryScreen(Screen):
 
         # Initialize chunk context panel
         chunk_panel = self.query_one("#chunk-context-panel", RichLog)
-        chunk_panel.write("[dim]Source context from documents will appear here when you submit a query.[/dim]")
-        chunk_panel.write("[dim]Evidence will be highlighted in yellow. Type 'fact N' to view a specific fact.[/dim]")
+        chunk_panel.write("[dim]Type 'fact N' (e.g., 'fact 3') to view source context for a specific fact.[/dim]")
+        chunk_panel.write("[dim]Evidence will be highlighted in yellow.[/dim]")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses."""
@@ -299,12 +300,22 @@ class QueryScreen(Screen):
 
             # Find the facts file (from project root outputs/, not session dir)
             if not self.facts_file:
-                session_dir = Path(".frfr_sessions") / self.session_id
+                session_dir = Path(default_config.session_storage_dir) / self.session_id
 
                 # Load session metadata to find facts files
                 metadata_file = session_dir / "metadata.json"
                 if not metadata_file.exists():
-                    raise FileNotFoundError(f"Session metadata not found at {metadata_file}")
+                    # Enhanced error message with debugging info
+                    import os
+                    error_msg = f"Session metadata not found.\n"
+                    error_msg += f"  Looking for: {metadata_file}\n"
+                    error_msg += f"  session_storage_dir: {default_config.session_storage_dir}\n"
+                    error_msg += f"  session_id: {self.session_id}\n"
+                    error_msg += f"  session_dir: {session_dir}\n"
+                    error_msg += f"  session_dir exists: {session_dir.exists()}\n"
+                    error_msg += f"  cwd: {os.getcwd()}\n"
+                    error_msg += f"  metadata_file.is_absolute(): {metadata_file.is_absolute()}"
+                    raise FileNotFoundError(error_msg)
 
                 with open(metadata_file) as mf:
                     metadata = json.load(mf)
@@ -511,8 +522,8 @@ When answering:
             results_log = self.query_one("#query-results", RichLog)
             results_log.write(f"[green]A:[/green] {result}\n")
 
-            # Update chunk context panel with used chunks
-            self._display_chunk_context()
+            # Don't automatically display chunk context - let user request it with "fact N"
+            # self._display_chunk_context()
 
             # Update status
             status_widget = self.query_one("#query-status", Static)

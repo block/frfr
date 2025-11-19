@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
+from frfr.config import default_config
+
 
 def sanitize_session_name(name: str, max_length: int = 50) -> str:
     """
@@ -100,42 +102,31 @@ Respond with ONLY the title, nothing else."""
 class Session:
     """Manages a session directory for temporary artifacts."""
 
-    def __init__(
-        self,
-        session_id: Optional[str] = None,
-        base_dir: str = ".frfr_sessions",
-        inputs_dir: str = "inputs",
-        outputs_dir: str = "outputs",
-    ):
+    def __init__(self, session_id: Optional[str] = None):
         """
         Initialize a session.
 
         Args:
             session_id: Optional session ID. If None, generates a new UUID.
-            base_dir: Base directory for all sessions.
-            inputs_dir: Directory for input document symlinks.
-            outputs_dir: Directory for output transformations.
         """
         self.session_id = session_id or f"sess_{uuid.uuid4().hex[:12]}"
-        self.base_dir = Path(base_dir)
+        self.base_dir = Path(default_config.session_storage_dir).expanduser()
         self.session_dir = self.base_dir / self.session_id
 
-        # Input/output directories (at project root)
-        self.inputs_dir = Path(inputs_dir)
-        self.outputs_dir = Path(outputs_dir)
+        # Global inputs directory for PDF symlinks
+        self.inputs_dir = Path(default_config.inputs_dir).expanduser()
+        self.inputs_dir.mkdir(parents=True, exist_ok=True)
 
         # Create session directory
         self.session_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create inputs and outputs directories
-        self.inputs_dir.mkdir(parents=True, exist_ok=True)
-        self.outputs_dir.mkdir(parents=True, exist_ok=True)
-
-        # Subdirectories
+        # Session subdirectories
+        self.text_dir = self.session_dir / "text"
         self.summaries_dir = self.session_dir / "summaries"
         self.facts_dir = self.session_dir / "facts"
         self.chunks_dir = self.session_dir / "chunks"
 
+        self.text_dir.mkdir(exist_ok=True)
         self.summaries_dir.mkdir(exist_ok=True)
         self.facts_dir.mkdir(exist_ok=True)
         self.chunks_dir.mkdir(exist_ok=True)
@@ -326,12 +317,11 @@ class Session:
         Delete the session and clean up all associated files.
 
         This will:
-        - Remove the session directory and all contents
+        - Remove the session directory and all contents (text, facts, chunks, summaries)
         - Remove symlinks in inputs_dir created by this session
-        - Remove text files in outputs_dir created by this session
         - NOT remove original PDF files (they are outside the session)
         """
-        # Clean up symlinks and output files for all documents
+        # Clean up symlinks for all documents
         for document_name, doc_info in self.get_documents().items():
             # Remove symlink if it exists
             symlink_path = Path(doc_info.get("symlink_path", ""))
@@ -342,16 +332,7 @@ class Session:
                     # Silently ignore errors removing symlinks
                     pass
 
-            # Remove text file if it exists
-            text_file = Path(doc_info.get("text_file", ""))
-            if text_file.exists():
-                try:
-                    text_file.unlink()
-                except Exception:
-                    # Silently ignore errors removing text files
-                    pass
-
-        # Remove the entire session directory
+        # Remove the entire session directory (includes text, facts, chunks, summaries)
         if self.session_dir.exists():
             shutil.rmtree(self.session_dir)
 
@@ -385,7 +366,7 @@ class Session:
             os.symlink(pdf_path, symlink_path)
 
         # Prepare output paths
-        text_file = self.outputs_dir / f"{document_name}_text.txt"
+        text_file = self.text_dir / f"{document_name}.txt"
         facts_file = self.facts_dir / f"{document_name}_facts.json"
 
         # Register document (or update existing)

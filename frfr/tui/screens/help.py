@@ -107,7 +107,7 @@ class HelpScreen(Screen):
         # Additional Information
         content.append("\n[bold yellow]Additional Information[/bold yellow]")
         content.append("─" * 60)
-        content.append("  • Sessions are stored in [cyan].frfr_sessions/[/cyan]")
+        content.append("  • Sessions are stored in [cyan]~/Documents/frfr/sessions/[/cyan]")
         content.append("  • Facts are validated against source documents")
         content.append("  • Use [cyan]frfr --help[/cyan] for CLI options")
         content.append("  • See docs at [cyan]docs/DOCS_INDEX.md[/cyan] for more info")
