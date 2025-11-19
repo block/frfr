@@ -128,7 +128,7 @@ class FrfrApp(App):
     """
 
     BINDINGS = [
-        Binding("q", "quit", "Quit", priority=True),
+        Binding("ctrl+c", "quit", "Quit", priority=True, show=False),
         Binding("question_mark", "help", "Help", key_display="?"),
         Binding("ctrl+h", "go_home", "Home"),
         Binding("ctrl+q", "go_query", "Query"),

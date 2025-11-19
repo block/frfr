@@ -94,7 +94,6 @@ class SessionDetailScreen(Screen):
             "[cyan]r[/cyan]      Refresh",
             "",
             "[cyan]Esc[/cyan]    Back",
-            "[cyan]q[/cyan]      Quit",
             "[cyan]?[/cyan]      Help",
         ]
         return "\n".join(commands)

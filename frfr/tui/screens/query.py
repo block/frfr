@@ -742,7 +742,6 @@ When answering:
             "[cyan]fact N[/cyan]     View fact",
             "",
             "[cyan]Esc[/cyan]        Back",
-            "[cyan]q[/cyan]          Quit",
             "[cyan]?[/cyan]          Help",
         ]
         return "\n".join(commands)

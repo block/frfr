@@ -259,7 +259,6 @@ class FactsBrowserScreen(Screen):
             "[cyan]f[/cyan]      Filters",
             "",
             "[cyan]Esc[/cyan]    Back",
-            "[cyan]q[/cyan]      Quit",
             "[cyan]?[/cyan]      Help",
         ]
         return "\n".join(commands)

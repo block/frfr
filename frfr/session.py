@@ -5,6 +5,7 @@ Session management for temporary storage and state.
 import json
 import os
 import re
+import shutil
 import uuid
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -319,6 +320,40 @@ class Session:
         self.metadata["status"] = "completed"
         self.metadata["completed_at"] = datetime.now().isoformat()
         self._save_metadata()
+
+    def delete(self):
+        """
+        Delete the session and clean up all associated files.
+
+        This will:
+        - Remove the session directory and all contents
+        - Remove symlinks in inputs_dir created by this session
+        - Remove text files in outputs_dir created by this session
+        - NOT remove original PDF files (they are outside the session)
+        """
+        # Clean up symlinks and output files for all documents
+        for document_name, doc_info in self.get_documents().items():
+            # Remove symlink if it exists
+            symlink_path = Path(doc_info.get("symlink_path", ""))
+            if symlink_path.exists() or symlink_path.is_symlink():
+                try:
+                    symlink_path.unlink()
+                except Exception:
+                    # Silently ignore errors removing symlinks
+                    pass
+
+            # Remove text file if it exists
+            text_file = Path(doc_info.get("text_file", ""))
+            if text_file.exists():
+                try:
+                    text_file.unlink()
+                except Exception:
+                    # Silently ignore errors removing text files
+                    pass
+
+        # Remove the entire session directory
+        if self.session_dir.exists():
+            shutil.rmtree(self.session_dir)
 
     def add_document(self, pdf_path: str, document_name: Optional[str] = None, auto_rename: bool = True) -> Dict[str, Any]:
         """

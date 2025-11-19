@@ -8,6 +8,8 @@ from textual.binding import Binding
 from rich.text import Text
 
 from frfr.tui.state import SessionInfo
+from frfr.tui.screens.delete_confirm import DeleteConfirmDialog
+from frfr.session import Session
 
 
 class HomeScreen(Screen):
@@ -41,10 +43,10 @@ class HomeScreen(Screen):
             "[cyan]↑/↓[/cyan]    Navigate",
             "[cyan]Enter[/cyan]  Open session",
             "[cyan]n[/cyan]      New session",
+            "[cyan]d[/cyan]      Delete session",
             "[cyan]r[/cyan]      Refresh list",
             "",
             "[cyan]?[/cyan]      Help",
-            "[cyan]q[/cyan]      Quit",
         ]
         return "\n".join(commands)
 
@@ -162,8 +164,39 @@ class HomeScreen(Screen):
             self.app.notify("No session selected", severity="warning")
             return
 
-        # TODO: Implement session deletion with confirmation
-        self.app.notify("Session deletion coming soon!", severity="information")
+        # Get selected session
+        row_key = table.cursor_row
+        session_info = self.app.state.sessions[row_key]
+
+        # Show confirmation dialog
+        def handle_confirm(confirmed: bool) -> None:
+            """Handle delete confirmation."""
+            if confirmed:
+                try:
+                    # Load and delete session
+                    session = Session(session_id=session_info.session_id)
+                    session.delete()
+
+                    self.app.notify(
+                        f"Session '{session_info.name}' deleted successfully",
+                        severity="information"
+                    )
+
+                    # Refresh the table
+                    self.refresh_table()
+                except Exception as e:
+                    self.app.notify(
+                        f"Failed to delete session: {e}",
+                        severity="error"
+                    )
+
+        self.app.push_screen(
+            DeleteConfirmDialog(
+                session_name=session_info.name,
+                document_count=session_info.document_count
+            ),
+            handle_confirm
+        )
 
     def action_refresh(self) -> None:
         """Refresh the sessions list."""

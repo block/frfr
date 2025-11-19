@@ -1971,8 +1971,8 @@ Extract all {pass_type} facts. RESPOND ONLY WITH A VALID JSON ARRAY:"""
 
         # Check existing progress for chunk count changes (EARLY detection)
         existing_progress = progress_tracker.load()
-        if existing_progress and 'total' in existing_progress:
-            old_chunk_count = existing_progress.get('total', 0)
+        if existing_progress:
+            old_chunk_count = existing_progress.total_chunks
             new_chunk_count = len(chunks)
 
             if old_chunk_count != new_chunk_count:

@@ -774,6 +774,55 @@ def session_info_cmd(session_id: str, document_name: str):
                 )
 
 
+@main.command("delete-session")
+@click.argument("session_id", type=str)
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
+def delete_session_cmd(session_id: str, yes: bool):
+    """
+    Delete a session and all associated files.
+
+    SESSION_ID: The session ID to delete (e.g., sess_ac43e048b916)
+    """
+    # Load session
+    try:
+        session = Session(session_id=session_id)
+    except Exception as e:
+        console.print(f"[red]✗ Session not found: {e}[/red]\n")
+        sys.exit(1)
+
+    # Show session info
+    console.print("\n[bold yellow]⚠️  Delete Session[/bold yellow]\n")
+    console.print(f"Session: [cyan]{session.session_id}[/cyan]")
+    console.print(f"Directory: [dim]{session.session_dir}[/dim]")
+
+    docs = session.get_documents()
+    if docs:
+        console.print(f"\nThis session contains [yellow]{len(docs)}[/yellow] document(s):")
+        for doc_name in docs.keys():
+            console.print(f"  • {doc_name}")
+
+    console.print("\n[bold red]This will permanently delete:[/bold red]")
+    console.print("  • Session directory and all metadata")
+    console.print("  • All extracted facts and summaries")
+    console.print("  • Associated text files and symlinks")
+    console.print("  • [green]Original PDFs will NOT be deleted[/green]\n")
+
+    # Confirm deletion
+    if not yes:
+        confirm = click.confirm("Are you sure you want to delete this session?", default=False)
+        if not confirm:
+            console.print("[yellow]Deletion cancelled[/yellow]")
+            sys.exit(0)
+
+    # Delete session
+    try:
+        session.delete()
+        console.print(f"[green]✓ Session '{session_id}' deleted successfully[/green]\n")
+    except Exception as e:
+        console.print(f"[red]✗ Failed to delete session: {e}[/red]\n")
+        sys.exit(1)
+
+
 @main.command("correct-quotes")
 @click.argument("session_id", type=str)
 @click.argument("text_file", type=click.Path(exists=True))

@@ -44,7 +44,7 @@ class HelpScreen(Screen):
         content.append("\n[bold yellow]Global Keybindings[/bold yellow]")
         content.append("─" * 60)
         self._add_keybinding(content, "?", "Show this help screen")
-        self._add_keybinding(content, "q", "Quit application")
+        self._add_keybinding(content, "Ctrl+c", "Quit application")
         self._add_keybinding(content, "Ctrl+h", "Go to home screen")
         self._add_keybinding(content, "Ctrl+q", "Go to query screen (if session selected)")
         self._add_keybinding(content, "/", "Search/filter (coming soon)")
@@ -55,7 +55,7 @@ class HelpScreen(Screen):
         content.append("─" * 60)
         self._add_keybinding(content, "Enter", "Open selected session")
         self._add_keybinding(content, "n", "Create new session (coming soon)")
-        self._add_keybinding(content, "d", "Delete selected session (coming soon)")
+        self._add_keybinding(content, "d", "Delete selected session")
         self._add_keybinding(content, "r", "Refresh session list")
         self._add_keybinding(content, "↑/↓", "Navigate session list")
 
