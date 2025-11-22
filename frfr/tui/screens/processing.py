@@ -123,8 +123,7 @@ class ProcessingScreen(Screen):
             if self.session_id:
                 cmd.extend(["--session-id", self.session_id])
 
-            # Add enrichment flags for better quality
-            cmd.append("--multipass")  # Enable multi-pass extraction (CUECs, tests, quantitative, technical)
+            # Add flags for better quality
             cmd.extend(["--max-workers", "20"])  # Use more workers for faster processing
             # Use adaptive chunking (default) - removes --chunk-size and --overlap to enable it
             cmd.append("--no-interactive")  # Don't enter interactive mode

@@ -1975,7 +1975,7 @@ Extract all {pass_type} facts. RESPOND ONLY WITH A VALID JSON ARRAY:"""
         start_chunk: int = 0,
         end_chunk: Optional[int] = None,
         progress_callback: callable = None,
-        enable_multipass: bool = False,
+        enable_multipass: bool = True,
         resume_incomplete: bool = False,
     ) -> FactExtractionResult:
         """
@@ -1988,7 +1988,7 @@ Extract all {pass_type} facts. RESPOND ONLY WITH A VALID JSON ARRAY:"""
             start_chunk: Start extraction from this chunk (for resume)
             end_chunk: End extraction at this chunk (inclusive, optional)
             progress_callback: Optional callback(current, total, message) for progress updates
-            enable_multipass: Enable multi-pass extraction with specialized passes
+            enable_multipass: Enable multi-pass extraction with specialized passes (default: True)
             resume_incomplete: Resume processing by only processing incomplete chunks
 
         Returns:
@@ -2167,6 +2167,49 @@ Extract all {pass_type} facts. RESPOND ONLY WITH A VALID JSON ARRAY:"""
         for chunk_id in sorted(chunk_results.keys()):
             validated_facts, _ = chunk_results[chunk_id]
             all_facts.extend(validated_facts)
+
+        # MULTIPASS EXTRACTION: Run specialized passes if enabled
+        if enable_multipass:
+            logger.info("=" * 60)
+            logger.info("MULTIPASS EXTRACTION: Running specialized passes")
+            logger.info("=" * 60)
+
+            specialized_passes = ["cuec", "test_procedures", "quantitative", "technical_specs"]
+            multipass_facts = []
+
+            for pass_type in specialized_passes:
+                logger.info(f"Starting specialized pass: {pass_type}")
+                pass_facts = []
+
+                # Run specialized extraction on each chunk
+                for chunk_id, chunk_text, start_line, end_line in chunks:
+                    try:
+                        chunk_specialized_facts = self.extract_specialized_facts(
+                            chunk_text=chunk_text,
+                            document_name=document_name,
+                            start_line=start_line,
+                            end_line=end_line,
+                            summary=summary,
+                            pass_type=pass_type,
+                        )
+                        pass_facts.extend(chunk_specialized_facts)
+                    except Exception as e:
+                        logger.warning(f"Specialized pass '{pass_type}' failed for chunk {chunk_id}: {e}")
+                        continue
+
+                if pass_facts:
+                    logger.info(f"✓ Specialized pass '{pass_type}' extracted {len(pass_facts)} additional facts")
+                    multipass_facts.extend(pass_facts)
+                else:
+                    logger.info(f"Specialized pass '{pass_type}' found no additional facts")
+
+            if multipass_facts:
+                logger.info(f"✅ Multipass extraction complete: {len(multipass_facts)} additional facts from specialized passes")
+                all_facts.extend(multipass_facts)
+            else:
+                logger.info("Multipass extraction complete: no additional facts found")
+
+            logger.info("=" * 60)
 
         # V4.7: GLOBAL POST-PROCESSING - Ensure 35% QV coverage across entire document
         logger.info("=" * 60)

@@ -16,8 +16,6 @@ class ProcessingStage(str, Enum):
     PENDING = "pending"
     EXTRACTING = "extracting"
     EXTRACTED = "extracted"
-    ENRICHING = "enriching"
-    ENRICHED = "enriched"
     VALIDATING = "validating"
     VALIDATED = "validated"
     FAILED = "failed"
@@ -63,9 +61,7 @@ class DocumentProgress:
             ProcessingStage.PENDING: 0.0,
             ProcessingStage.EXTRACTING: 0.2,
             ProcessingStage.EXTRACTED: 0.4,
-            ProcessingStage.ENRICHING: 0.5,
-            ProcessingStage.ENRICHED: 0.6,
-            ProcessingStage.VALIDATING: 0.8,
+            ProcessingStage.VALIDATING: 0.7,
             ProcessingStage.VALIDATED: 0.9,
             ProcessingStage.COMPLETED: 1.0,
             ProcessingStage.FAILED: 0.0,

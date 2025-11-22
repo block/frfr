@@ -22,7 +22,6 @@ class SessionDetailScreen(Screen):
         Binding("i", "query_session", "Query"),
         Binding("a", "add_document", "Add Document"),
         Binding("p", "reprocess_document", "Reprocess Document"),
-        Binding("e", "enrich_facts", "Enrich Facts"),
         Binding("r", "refresh", "Refresh"),
     ]
 
@@ -91,7 +90,6 @@ class SessionDetailScreen(Screen):
             "[cyan]i[/cyan]      Query session",
             "[cyan]a[/cyan]      Add document",
             "[cyan]p[/cyan]      Reprocess doc",
-            "[cyan]e[/cyan]      Enrich facts",
             "[cyan]r[/cyan]      Refresh",
             "",
             "[cyan]Esc[/cyan]    Back",
@@ -297,32 +295,6 @@ class SessionDetailScreen(Screen):
         except (IndexError, KeyError) as e:
             self.app.notify(f"Could not find document: {str(e)}", severity="error")
             return
-
-    def action_enrich_facts(self) -> None:
-        """Enrich facts by recovering near matches with LLM."""
-        from frfr.tui.screens.recovery import RecoveryScreen
-
-        table = self.query_one("#documents-table", DataTable)
-
-        # If a document is selected, enrich just that document; otherwise enrich all
-        document_name = None
-        if table.cursor_row is not None:
-            try:
-                doc = self.session_info.documents[table.cursor_row]
-                document_name = doc.get("_doc_key")
-            except (IndexError, KeyError):
-                pass
-
-        if document_name:
-            self.app.notify(f"Enriching facts for {document_name}...", severity="information")
-        else:
-            self.app.notify(f"Enriching all facts in session...", severity="information")
-
-        # Show recovery screen
-        self.app.push_screen(RecoveryScreen(
-            session_id=self.session_info.session_id,
-            document_name=document_name
-        ))
 
     def action_refresh(self) -> None:
         """Refresh the session data."""
