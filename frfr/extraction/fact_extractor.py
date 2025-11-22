@@ -347,7 +347,11 @@ RESPOND ONLY WITH VALID JSON:"""
 
     def _find_line_numbers(self, chunk_text: str, all_lines: List[str], chunk_id: int) -> tuple[int, int]:
         """
-        Find approximate line numbers for a chunk in the original document.
+        Find accurate line numbers for a chunk in the original document using fingerprint matching.
+
+        Uses a sequence of non-empty lines from the chunk start as a fingerprint to uniquely
+        identify the chunk's position. This handles cases where individual lines appear multiple
+        times in the document.
 
         Args:
             chunk_text: The chunk text
@@ -364,21 +368,68 @@ RESPOND ONLY WITH VALID JSON:"""
         if chunk_id == 0:
             return 1, chunk_line_count
 
-        # For subsequent chunks, make a best-effort estimate
-        # This is approximate since we're chunking by characters not lines
-        try:
-            # Try to find first non-empty line of chunk in the document
-            for chunk_line in chunk_lines[:5]:
-                if chunk_line.strip():
-                    for idx, doc_line in enumerate(all_lines):
-                        if doc_line.strip() == chunk_line.strip():
-                            start_line = idx + 1
-                            end_line = min(start_line + chunk_line_count - 1, len(all_lines))
-                            return start_line, end_line
-        except:
-            pass
+        # Build a sequence of non-empty lines from the chunk start to use as a fingerprint
+        # This makes matching more robust when the same line appears multiple times
+        # Also track how many lines (including empty ones) come before the first non-empty line
+        chunk_fingerprint = []
+        empty_lines_before_fingerprint = 0
+        for i, chunk_line in enumerate(chunk_lines[:15]):  # Use first 15 lines as fingerprint
+            stripped = chunk_line.strip()
+            if stripped:
+                if len(chunk_fingerprint) == 0:
+                    # This is the first non-empty line, save how many empty lines came before it
+                    empty_lines_before_fingerprint = i
+                chunk_fingerprint.append(stripped)
+            if len(chunk_fingerprint) >= 5:  # We need at least 5 non-empty lines
+                break
 
-        # Fallback: estimate based on chunk ID
+        if len(chunk_fingerprint) < 3:
+            # Not enough unique content, fall back to estimation
+            estimated_start = chunk_id * 50 + 1  # Rough estimate
+            estimated_end = min(estimated_start + chunk_line_count, len(all_lines))
+            return estimated_start, estimated_end
+
+        # Search for this sequence of lines in the document
+        doc_fingerprint = []
+        fingerprint_start_idx = None
+
+        for idx, doc_line in enumerate(all_lines):
+            stripped = doc_line.strip()
+            if not stripped:
+                continue
+
+            # Check if this line matches the current position in fingerprint
+            if len(doc_fingerprint) < len(chunk_fingerprint):
+                if stripped == chunk_fingerprint[len(doc_fingerprint)]:
+                    if len(doc_fingerprint) == 0:
+                        fingerprint_start_idx = idx
+                    doc_fingerprint.append(stripped)
+
+                    # If we've matched all fingerprint lines, we found it!
+                    if len(doc_fingerprint) == len(chunk_fingerprint):
+                        # Adjust for empty lines that came before the first non-empty line in the chunk
+                        # Walk backwards from fingerprint_start_idx to find the actual chunk start
+                        actual_start_idx = fingerprint_start_idx
+                        lines_to_go_back = empty_lines_before_fingerprint
+
+                        # Go backwards through the document to find where the chunk actually starts
+                        while lines_to_go_back > 0 and actual_start_idx > 0:
+                            actual_start_idx -= 1
+                            lines_to_go_back -= 1
+
+                        start_line = actual_start_idx + 1
+                        end_line = min(start_line + chunk_line_count - 1, len(all_lines))
+                        return start_line, end_line
+                else:
+                    # Mismatch, reset
+                    doc_fingerprint = []
+                    fingerprint_start_idx = None
+                    # Check if current line matches first fingerprint line
+                    if stripped == chunk_fingerprint[0]:
+                        fingerprint_start_idx = idx
+                        doc_fingerprint.append(stripped)
+
+        # Fallback: estimate based on chunk ID if fingerprint not found
         estimated_start = chunk_id * 50 + 1  # Rough estimate
         estimated_end = min(estimated_start + chunk_line_count, len(all_lines))
         return estimated_start, estimated_end

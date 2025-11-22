@@ -1,6 +1,7 @@
 """Processing screen for document extraction."""
 
 import subprocess
+import sys
 from pathlib import Path
 from typing import Optional, List
 
@@ -116,7 +117,7 @@ class ProcessingScreen(Screen):
 
         try:
             # Build the command
-            cmd = ["python", "-m", "frfr.cli", "process"]
+            cmd = [sys.executable, "-m", "frfr.cli", "process"]
             cmd.extend(self.file_paths)
 
             if self.session_id:

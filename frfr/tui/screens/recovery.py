@@ -1,6 +1,7 @@
 """Recovery screen for enriching existing facts with LLM."""
 
 import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -145,7 +146,7 @@ class RecoveryScreen(Screen):
 
                 # Build recovery command using the validate-facts command
                 cmd = [
-                    "python", "-m", "frfr.cli", "validate-facts",
+                    sys.executable, "-m", "frfr.cli", "validate-facts",
                     str(facts_file),
                     str(text_file),
                     "--update-facts"  # This flag will save corrected facts

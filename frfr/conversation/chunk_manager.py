@@ -126,6 +126,97 @@ class ChunkManager:
         except Exception:
             return None
 
+    def _find_chunk_line_numbers(self, document: str, chunk_text: str, chunk_num: int) -> tuple[int, int]:
+        """
+        Find actual line numbers for a chunk by searching in the full document.
+
+        This mirrors the logic from FactExtractor._find_line_numbers() but works
+        from the chunk manager side.
+
+        Args:
+            document: Document name
+            chunk_text: The chunk's text content
+            chunk_num: Chunk number (for fallback estimation)
+
+        Returns:
+            Tuple of (start_line, end_line) - 1-indexed
+        """
+        chunk_lines = chunk_text.split("\n")
+        chunk_line_count = len(chunk_lines)
+
+        # For first chunk, always starts at line 1
+        if chunk_num == 0:
+            return 1, chunk_line_count
+
+        # Try to load the full document text file
+        text_file = self.session_path / "text" / f"{document}.txt"
+        if not text_file.exists():
+            # Fallback to old estimation if text file not found
+            line_start = chunk_num * self.chunk_advance + 1
+            line_end = line_start + chunk_line_count - 1
+            return line_start, line_end
+
+        try:
+            with open(text_file, 'r', encoding='utf-8') as f:
+                all_lines = f.readlines()
+
+            # Build a sequence of non-empty lines from the chunk start to use as a fingerprint
+            # This makes matching more robust when the same line appears multiple times
+            chunk_fingerprint = []
+            for chunk_line in chunk_lines[:15]:  # Use first 15 lines as fingerprint
+                stripped = chunk_line.strip()
+                if stripped:
+                    chunk_fingerprint.append(stripped)
+                if len(chunk_fingerprint) >= 5:  # We need at least 5 non-empty lines
+                    break
+
+            if len(chunk_fingerprint) < 3:
+                # Not enough unique content, fall back to estimation
+                line_start = chunk_num * self.chunk_advance + 1
+                line_end = line_start + chunk_line_count - 1
+                return line_start, line_end
+
+            # Search for this sequence of lines in the document
+            doc_fingerprint = []
+            fingerprint_start_idx = None
+
+            for idx, doc_line in enumerate(all_lines):
+                stripped = doc_line.strip()
+                if not stripped:
+                    continue
+
+                # Check if this line matches the current position in fingerprint
+                if len(doc_fingerprint) < len(chunk_fingerprint):
+                    if stripped == chunk_fingerprint[len(doc_fingerprint)]:
+                        if len(doc_fingerprint) == 0:
+                            fingerprint_start_idx = idx
+                        doc_fingerprint.append(stripped)
+
+                        # If we've matched all fingerprint lines, we found it!
+                        if len(doc_fingerprint) == len(chunk_fingerprint):
+                            start_line = fingerprint_start_idx + 1
+                            end_line = min(start_line + chunk_line_count - 1, len(all_lines))
+                            return start_line, end_line
+                    else:
+                        # Mismatch, reset
+                        doc_fingerprint = []
+                        fingerprint_start_idx = None
+                        # Check if current line matches first fingerprint line
+                        if stripped == chunk_fingerprint[0]:
+                            fingerprint_start_idx = idx
+                            doc_fingerprint.append(stripped)
+
+            # If not found, fall back to estimation
+            line_start = chunk_num * self.chunk_advance + 1
+            line_end = line_start + chunk_line_count - 1
+            return line_start, line_end
+
+        except Exception:
+            # Fallback to old estimation on any error
+            line_start = chunk_num * self.chunk_advance + 1
+            line_end = line_start + chunk_line_count - 1
+            return line_start, line_end
+
     def load_chunk(self, document: str, chunk_id: str) -> Optional[ChunkInfo]:
         """
         Load a specific chunk by document and chunk ID.
@@ -156,16 +247,11 @@ class ChunkManager:
         try:
             text = chunk_file.read_text(encoding="utf-8")
 
-            # Extract line numbers from the chunk file
-            # Chunks are created with self.chunk_size lines and self.overlap_size overlap
-            # So each chunk advances by self.chunk_advance lines (chunk_size - overlap_size)
-            # Example with defaults (50, 10):
-            #   chunk_0000: lines 1-50
-            #   chunk_0001: lines 41-90 (overlaps 10 lines with chunk_0000)
-            #   chunk_0002: lines 81-130 (overlaps 10 lines with chunk_0001)
+            # Calculate line numbers by searching for chunk's first line in the full document
+            # NOTE: We cannot rely on fixed chunk size calculations because the system uses
+            # adaptive character-based chunking with varying line counts per chunk.
             chunk_num = int(chunk_id.split("_")[-1])
-            line_start = chunk_num * self.chunk_advance + 1
-            line_end = line_start + len(text.splitlines()) - 1
+            line_start, line_end = self._find_chunk_line_numbers(document, text, chunk_num)
 
             chunk_info = ChunkInfo(
                 chunk_id=chunk_id,
@@ -187,16 +273,97 @@ class ChunkManager:
         """
         Find the chunk that contains a given fact.
 
+        Uses multiple strategies:
+        1. Search for evidence text in chunks (most reliable)
+        2. Use line numbers from source_location (may be incorrect due to extraction issues)
+        3. Try adjacent chunks
+
         Args:
-            fact: Fact dictionary with source_location
+            fact: Fact dictionary with source_location and evidence quotes
             document: Document name
 
         Returns:
             ChunkInfo if found, None otherwise
         """
-        source_location = fact.get("source_location", "")
+        # STRATEGY 1: Search for evidence text in chunks (most reliable)
+        # Get evidence text to search for
+        evidence_texts = []
+        if "evidence_quotes" in fact and fact["evidence_quotes"]:
+            evidence_texts = [eq["quote"] if isinstance(eq, dict) else eq for eq in fact["evidence_quotes"]]
+        elif "evidence_quote" in fact and fact["evidence_quote"]:
+            evidence_texts = [fact["evidence_quote"]]
 
-        # Parse line numbers from source_location (e.g., "Lines 42-45")
+        if evidence_texts and self.chunks_dir.exists():
+            # Search through chunk files for the evidence text
+            chunk_files = sorted(self.chunks_dir.glob(f"{document}_chunk_*.txt"))
+
+            # Extract key phrases from evidence for flexible matching
+            def extract_key_phrases(text: str) -> List[str]:
+                """Extract distinctive phrases from evidence text."""
+                if not text or len(text) < 10:
+                    return []
+
+                words = text.split()
+                phrases = []
+
+                # Try full text first
+                phrases.append(text)
+
+                # Try 5-word sliding windows (more distinctive than shorter phrases)
+                for i in range(len(words) - 4):
+                    phrase = ' '.join(words[i:i+5])
+                    if len(phrase) > 20:  # Only substantial phrases
+                        phrases.append(phrase)
+
+                # Try 7-word windows if available
+                for i in range(len(words) - 6):
+                    phrase = ' '.join(words[i:i+7])
+                    if len(phrase) > 30:
+                        phrases.append(phrase)
+
+                return phrases
+
+            for chunk_file in chunk_files:
+                try:
+                    chunk_text = chunk_file.read_text(encoding="utf-8")
+                    chunk_lower = chunk_text.lower()
+                    norm_chunk = re.sub(r'\s+', ' ', chunk_lower)
+
+                    # Check if any evidence text appears in this chunk
+                    for evidence in evidence_texts:
+                        if not evidence or len(evidence) < 10:
+                            continue
+
+                        evidence_lower = evidence.lower()
+
+                        # Strategy 1: Exact match (fastest)
+                        if evidence_lower in chunk_lower:
+                            chunk_id = chunk_file.stem.split('_')[-1]
+                            return self.load_chunk(document, f"chunk_{chunk_id}")
+
+                        # Strategy 2: Normalized match
+                        norm_evidence = re.sub(r'\s+', ' ', evidence_lower.strip())
+                        if norm_evidence in norm_chunk:
+                            chunk_id = chunk_file.stem.split('_')[-1]
+                            return self.load_chunk(document, f"chunk_{chunk_id}")
+
+                        # Strategy 3: Key phrase matching (handles paraphrasing)
+                        key_phrases = extract_key_phrases(evidence)
+                        matches = 0
+                        for phrase in key_phrases[1:]:  # Skip full text, already tried
+                            phrase_lower = phrase.lower()
+                            if phrase_lower in chunk_lower:
+                                matches += 1
+                                # If we find multiple key phrases, this is likely the right chunk
+                                if matches >= 2:
+                                    chunk_id = chunk_file.stem.split('_')[-1]
+                                    return self.load_chunk(document, f"chunk_{chunk_id}")
+
+                except Exception:
+                    continue
+
+        # STRATEGY 2: Fall back to line number-based search
+        source_location = fact.get("source_location", "")
         line_match = re.search(r'[Ll]ines?\s+(\d+)(?:-(\d+))?', source_location)
 
         if not line_match:
@@ -204,21 +371,39 @@ class ChunkManager:
 
         start_line = int(line_match.group(1))
 
-        # Estimate chunk ID based on line number
-        # Chunks advance by self.chunk_advance lines (chunk_size - overlap_size)
-        # So line N is in chunk floor((N-1) / chunk_advance)
+        # Estimate chunk ID based on line number (may be incorrect)
         chunk_num = (start_line - 1) // self.chunk_advance
         chunk_id = f"chunk_{chunk_num:04d}"
 
         # Try to load this chunk
         chunk = self.load_chunk(document, chunk_id)
 
-        # If not found, try adjacent chunks (due to overlap or rounding)
-        if chunk is None and chunk_num > 0:
-            chunk = self.load_chunk(document, f"chunk_{(chunk_num-1):04d}")
+        # Check if the evidence is actually in this chunk
+        if chunk and evidence_texts:
+            found_evidence = False
+            for evidence in evidence_texts:
+                if evidence and evidence.lower() in chunk.text.lower():
+                    found_evidence = True
+                    break
 
-        if chunk is None:
-            chunk = self.load_chunk(document, f"chunk_{(chunk_num+1):04d}")
+            if found_evidence:
+                return chunk
+            # Evidence not in this chunk - the line numbers are wrong, search nearby chunks
+
+        # STRATEGY 3: Try adjacent chunks
+        if chunk is None or (chunk and evidence_texts and not found_evidence):
+            for offset in [-2, -1, 1, 2]:
+                test_num = chunk_num + offset
+                if test_num >= 0:
+                    test_chunk = self.load_chunk(document, f"chunk_{test_num:04d}")
+                    if test_chunk:
+                        # Check if evidence is in this chunk
+                        if evidence_texts:
+                            for evidence in evidence_texts:
+                                if evidence and evidence.lower() in test_chunk.text.lower():
+                                    return test_chunk
+                        else:
+                            return test_chunk
 
         return chunk
 
@@ -432,53 +617,95 @@ class ChunkManager:
             # Only normalize whitespace, preserve case and punctuation
             return re.sub(r'\s+', ' ', s).strip().lower()
 
-        # Find all lines that contain evidence - use more precise matching
+        # Find all lines that contain evidence - use progressive matching strategies
         for evidence in evidence_texts:
             if not evidence or len(evidence.strip()) < 5:  # Skip very short evidence
                 continue
 
-            # Try exact match first (case insensitive)
+            # Normalize full chunk text for multi-line matching
+            chunk_text_lower = text.lower()
             evidence_lower = evidence.lower()
             evidence_words = len(evidence.split())
 
-            for i, line in enumerate(lines):
-                line_lower = line.lower()
+            # Strategy 1: Try exact substring match in full chunk text (handles multi-line evidence)
+            if evidence_lower in chunk_text_lower:
+                # Find which lines contain this evidence
+                # First, try to find the start position
+                start_pos = chunk_text_lower.find(evidence_lower)
+                if start_pos >= 0:
+                    # Count newlines before this position to find line number
+                    line_num = text[:start_pos].count('\n')
+                    # Mark several lines around this match
+                    for offset in range(-1, len(evidence.split('\n')) + 2):
+                        idx = line_num + offset
+                        if 0 <= idx < len(lines):
+                            evidence_line_indices.add(idx)
+                continue
 
-                # For multi-word evidence, use exact substring match
-                if evidence_words >= 3:
-                    # Exact substring match (case insensitive)
-                    if evidence_lower in line_lower:
-                        evidence_line_indices.add(i)
-                        continue
-                elif evidence_words == 2:
-                    # For 2-word phrases, require word boundaries
-                    import re as regex
-                    # Use word boundary matching for 2-word phrases
-                    pattern = r'\b' + regex.escape(evidence_lower) + r'\b'
-                    if regex.search(pattern, line_lower):
-                        evidence_line_indices.add(i)
-                        continue
-                else:
-                    # For single words, require they're a significant part of the line
-                    if evidence_lower in line_lower:
-                        # Only match if the word is substantial relative to line
-                        line_words = len(line.split())
-                        if line_words <= 8:  # Short lines, single word can match
+            # Strategy 2: Try finding significant portions of evidence (handles truncation)
+            # Split evidence into significant phrases (5+ words)
+            evidence_phrases = []
+            words = evidence.split()
+            if len(words) >= 5:
+                # Try first 5 words, middle 5 words, last 5 words
+                evidence_phrases.append(' '.join(words[:5]))
+                if len(words) >= 10:
+                    mid = len(words) // 2
+                    evidence_phrases.append(' '.join(words[mid-2:mid+3]))
+                if len(words) >= 7:
+                    evidence_phrases.append(' '.join(words[-5:]))
+
+            for phrase in evidence_phrases:
+                phrase_lower = phrase.lower()
+                if phrase_lower in chunk_text_lower:
+                    start_pos = chunk_text_lower.find(phrase_lower)
+                    line_num = text[:start_pos].count('\n')
+                    for offset in range(-1, 3):
+                        idx = line_num + offset
+                        if 0 <= idx < len(lines):
+                            evidence_line_indices.add(idx)
+                    break
+
+            # Strategy 3: Line-by-line matching (original strategy)
+            if not evidence_line_indices:
+                for i, line in enumerate(lines):
+                    line_lower = line.lower()
+
+                    # For multi-word evidence, use exact substring match
+                    if evidence_words >= 3:
+                        # Exact substring match (case insensitive)
+                        if evidence_lower in line_lower:
                             evidence_line_indices.add(i)
                             continue
-
-                # Fuzzy match only for longer evidence strings (3+ words)
-                if evidence_words >= 3:
-                    norm_evidence = normalize(evidence)
-                    norm_line = normalize(line)
-
-                    # Check if normalized evidence is in normalized line
-                    # AND the match is substantial
-                    if norm_evidence in norm_line:
-                        # Calculate match quality
-                        match_ratio = len(norm_evidence) / max(len(norm_line), 1)
-                        if match_ratio > 0.4:  # At least 40% of the line should be evidence
+                    elif evidence_words == 2:
+                        # For 2-word phrases, require word boundaries
+                        import re as regex
+                        # Use word boundary matching for 2-word phrases
+                        pattern = r'\b' + regex.escape(evidence_lower) + r'\b'
+                        if regex.search(pattern, line_lower):
                             evidence_line_indices.add(i)
+                            continue
+                    else:
+                        # For single words, require they're a significant part of the line
+                        if evidence_lower in line_lower:
+                            # Only match if the word is substantial relative to line
+                            line_words = len(line.split())
+                            if line_words <= 8:  # Short lines, single word can match
+                                evidence_line_indices.add(i)
+                                continue
+
+                    # Fuzzy match only for longer evidence strings (3+ words)
+                    if evidence_words >= 3:
+                        norm_evidence = normalize(evidence)
+                        norm_line = normalize(line)
+
+                        # Check if normalized evidence is in normalized line
+                        # AND the match is substantial
+                        if norm_evidence in norm_line:
+                            # Calculate match quality
+                            match_ratio = len(norm_evidence) / max(len(norm_line), 1)
+                            if match_ratio > 0.4:  # At least 40% of the line should be evidence
+                                evidence_line_indices.add(i)
 
         if not evidence_line_indices:
             # No evidence found - return detailed message for debugging

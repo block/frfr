@@ -30,7 +30,9 @@
       "Bash(./bin/frfr:*)",
       "Bash(find:*)",
       "Bash(test:*)",
-      "Bash(osascript:*)"
+      "Bash(osascript:*)",
+      "Bash(claude:*)",
+      "Bash(getconf:*)"
     ],
     "deny": [],
     "ask": []

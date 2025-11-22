@@ -5,7 +5,7 @@ import json
 import re
 import subprocess
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 
 from textual.app import ComposeResult
 from frfr.config import default_config
@@ -251,42 +251,365 @@ class QueryScreen(Screen):
         return "Previous conversation:\n" + "".join(context_parts)
 
     async def execute_query(self, query: str) -> str:
-        """Execute the query using Claude CLI with retry on context limit errors."""
-        # Try with progressively smaller conversation history if we hit context limits
-        max_token_budgets = [20000, 10000, 5000, 0]  # Token budgets to try
+        """Execute the query using Claude CLI with multi-pass processing to handle ALL facts."""
+        try:
+            # First, try single-pass with all facts (fastest)
+            status_widget = self.query_one("#query-status", Static)
+            status_widget.update("[bold cyan]⏳ Attempting single-pass query with all facts...[/bold cyan]")
 
-        for attempt, budget in enumerate(max_token_budgets):
-            try:
-                if attempt > 0:
-                    # Inform user we're retrying with less history
-                    status_widget = self.query_one("#query-status", Static)
-                    if budget > 0:
-                        status_widget.update(f"[bold yellow]⚠️ Context too large, truncating history to {budget} tokens and retrying...[/bold yellow]")
-                    else:
-                        status_widget.update(f"[bold yellow]⚠️ Context too large, removing all conversation history and retrying...[/bold yellow]")
-                    await asyncio.sleep(1)  # Give user time to see the message
+            result = await self._execute_single_pass_query(query)
+            return result
 
-                result = await self._execute_query_attempt(query, max_conversation_tokens=budget)
+        except Exception as e:
+            error_str = str(e)
+            # Check if this is a context limit error
+            if "prompt is too long" in error_str.lower() or "context_length_exceeded" in error_str.lower() or "maximum context length" in error_str.lower():
+                # Context too large - switch to multi-pass strategy
+                status_widget = self.query_one("#query-status", Static)
+                status_widget.update("[bold yellow]⚠️ Context too large for single pass. Processing all facts in batches...[/bold yellow]")
+                await asyncio.sleep(1)
+
+                # Multi-pass: process all facts in batches, then synthesize
+                result = await self._execute_multi_pass_query(query)
                 return result
+            else:
+                # Non-context-limit error
+                return f"[red]Error: {error_str}[/red]"
 
-            except Exception as e:
-                error_str = str(e)
-                # Check if this is a context limit error
-                if "prompt is too long" in error_str.lower() or "context_length_exceeded" in error_str.lower() or "maximum context length" in error_str.lower():
-                    # If this was the last attempt (no conversation history), give up
-                    if budget == 0:
-                        return f"[red]Error: Context limit exceeded even without conversation history. The facts may be too large for the model.[/red]"
-                    # Otherwise, continue to next attempt with smaller budget
-                    continue
-                else:
-                    # Non-context-limit error, don't retry
-                    return f"[red]Error: {error_str}[/red]"
+    async def _load_all_facts(self) -> List[Dict]:
+        """Load all facts from the session."""
+        session_dir = Path(default_config.session_storage_dir) / self.session_id
 
-        # Should never reach here, but just in case
-        return "[red]Error: Failed to execute query after all retry attempts[/red]"
+        if not self.facts_file:
+            metadata_file = session_dir / "metadata.json"
+            with open(metadata_file) as mf:
+                metadata = json.load(mf)
+                documents = metadata.get("document_registry", {})
+                first_doc = list(documents.values())[0]
+                self.facts_file = Path(first_doc.get("facts_file", ""))
 
-    async def _execute_query_attempt(self, query: str, max_conversation_tokens: int = 20000) -> str:
-        """Execute a single query attempt with specified conversation token budget."""
+        with open(self.facts_file) as f:
+            facts_data = json.load(f)
+            facts = []
+            if "documents" in facts_data:
+                for doc_name, doc_data in facts_data.get("documents", {}).items():
+                    facts.extend(doc_data.get("facts", []))
+            else:
+                facts = facts_data.get("facts", [])
+
+        # Store for interactive clicking
+        self.current_facts = facts
+        return facts
+
+    async def _process_fact_batch(self, batch_facts: List[Dict], start_idx: int, query: str) -> Optional[Dict]:
+        """
+        Process a batch of facts and extract relevant insights.
+
+        Args:
+            batch_facts: Facts in this batch
+            start_idx: Starting index of this batch in full facts list
+            query: User query
+
+        Returns:
+            Dict with 'insights' and 'relevant_facts' keys, or None if error
+        """
+        # Build compressed facts context for this batch
+        facts_context = f"Facts {start_idx + 1}-{start_idx + len(batch_facts)}:\n"
+        for i, fact in enumerate(batch_facts, start=start_idx + 1):
+            claim = fact.get("claim", "")
+            location = fact.get("source_location", "")
+            evidence = fact.get("evidence_quote", "")
+            if "evidence_quotes" in fact and fact["evidence_quotes"]:
+                evidence_list = fact["evidence_quotes"]
+                if isinstance(evidence_list, list) and len(evidence_list) > 0:
+                    evidence = evidence_list[0].get("quote", "") if isinstance(evidence_list[0], dict) else evidence_list[0]
+
+            facts_context += f"[{i}] {claim} | {location} | {evidence}\n"
+
+        # Query Claude to extract relevant insights
+        prompt = f"""{facts_context}
+
+Query: {query}
+
+Task: Analyze these facts and identify which are relevant to answering the query.
+
+Output JSON format:
+{{
+  "relevant_facts": [list of fact numbers that are relevant],
+  "insights": "Brief summary of key insights from relevant facts (2-3 sentences)"
+}}
+
+RESPOND WITH ONLY THE JSON OBJECT:"""
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "claude", "-p",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(input=prompt.encode('utf-8')),
+                timeout=60
+            )
+
+            if process.returncode != 0:
+                return None
+
+            response = stdout.decode('utf-8')
+
+            # Parse JSON response
+            if "```json" in response:
+                json_start = response.find("```json") + 7
+                json_end = response.find("```", json_start)
+                response = response[json_start:json_end].strip()
+            elif "```" in response:
+                json_start = response.find("```") + 3
+                json_end = response.find("```", json_start)
+                response = response[json_start:json_end].strip()
+
+            result = json.loads(response)
+            return result
+
+        except Exception:
+            return None
+
+    async def _synthesize_final_answer(
+        self,
+        query: str,
+        insights: List[str],
+        relevant_fact_numbers: Set[int],
+        all_facts: List[Dict]
+    ) -> str:
+        """
+        Synthesize final answer from accumulated insights.
+
+        Args:
+            query: User query
+            insights: List of insights from each batch
+            relevant_fact_numbers: Set of all relevant fact numbers
+            all_facts: All facts for reference
+
+        Returns:
+            Final answer
+        """
+        # Build context with just relevant facts
+        relevant_facts_context = "Relevant facts:\n"
+        for fact_num in sorted(relevant_fact_numbers):
+            if 1 <= fact_num <= len(all_facts):
+                fact = all_facts[fact_num - 1]
+                claim = fact.get("claim", "")
+                location = fact.get("source_location", "")
+                evidence = fact.get("evidence_quote", "")
+                if "evidence_quotes" in fact and fact["evidence_quotes"]:
+                    evidence_list = fact["evidence_quotes"]
+                    if isinstance(evidence_list, list) and len(evidence_list) > 0:
+                        evidence = evidence_list[0].get("quote", "") if isinstance(evidence_list[0], dict) else evidence_list[0]
+
+                relevant_facts_context += f"[{fact_num}] {claim} | {location} | {evidence}\n"
+
+        # Combine accumulated insights
+        accumulated_insights = "\n\nInsights from batches:\n" + "\n".join(f"- {insight}" for insight in insights if insight)
+
+        prompt = f"""{relevant_facts_context}
+
+{accumulated_insights}
+
+Query: {query}
+
+Using the relevant facts and accumulated insights above, provide a comprehensive answer to the query.
+- Cite specific fact numbers (e.g., "According to [5]...")
+- Synthesize information from multiple facts when relevant
+- Be thorough and detailed
+
+Answer:"""
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "claude", "-p",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(input=prompt.encode('utf-8')),
+                timeout=120
+            )
+
+            if process.returncode == 0:
+                return stdout.decode('utf-8')
+            else:
+                return f"[red]Error synthesizing final answer: {stderr.decode('utf-8')}[/red]"
+
+        except Exception as e:
+            return f"[red]Error synthesizing final answer: {e}[/red]"
+
+    def _filter_facts_by_query(self, facts: List[Dict], query: str, max_facts: Optional[int] = None) -> List[Dict]:
+        """
+        Filter and rank facts by relevance to query.
+
+        Args:
+            facts: All facts from the document
+            query: User query string
+            max_facts: Maximum number of facts to return (None = all facts)
+
+        Returns:
+            Filtered and ranked list of facts
+        """
+        if max_facts is None:
+            return facts  # Return all facts if no limit
+
+        # Extract query keywords (remove common stop words)
+        stop_words = {'the', 'a', 'an', 'is', 'are', 'was', 'were', 'what', 'when', 'where',
+                      'who', 'why', 'how', 'in', 'on', 'at', 'to', 'for', 'of', 'with'}
+        query_keywords = set(word.lower() for word in query.split() if word.lower() not in stop_words and len(word) > 2)
+
+        if not query_keywords:
+            # No meaningful keywords, return first N facts
+            return facts[:max_facts]
+
+        # Score each fact by keyword overlap
+        scored_facts = []
+        for fact in facts:
+            # Build searchable text from fact
+            fact_text = f"{fact.get('claim', '')} {fact.get('evidence_quote', '')}".lower()
+
+            # Count keyword matches
+            matches = sum(1 for keyword in query_keywords if keyword in fact_text)
+
+            # Boost score for title/heading-like facts (often more important)
+            if fact.get('claim', '').isupper() or len(fact.get('claim', '')) < 100:
+                matches += 0.5
+
+            scored_facts.append((matches, fact))
+
+        # Sort by score (descending) and take top N
+        scored_facts.sort(key=lambda x: x[0], reverse=True)
+        return [fact for _, fact in scored_facts[:max_facts]]
+
+    async def _execute_single_pass_query(self, query: str) -> str:
+        """
+        Execute query in single pass with all facts.
+
+        Args:
+            query: User query string
+
+        Raises:
+            Exception: If context limit exceeded
+        """
+        # Use generous budgets for single-pass
+        chunk_budget = 5000
+        history_budget = 5000
+        max_facts = None  # All facts
+
+        return await self._execute_query_with_facts(
+            query,
+            chunk_budget=chunk_budget,
+            history_budget=history_budget,
+            max_facts=max_facts
+        )
+
+    async def _execute_multi_pass_query(self, query: str) -> str:
+        """
+        Execute query by processing all facts in batches (map-reduce).
+
+        Strategy:
+        1. Map phase: Process facts in batches of 500, extract relevant insights
+        2. Reduce phase: Synthesize insights to answer the query
+
+        Args:
+            query: User query string
+
+        Returns:
+            Query answer
+        """
+        # Load all facts
+        results_log = self.query_one("#query-results", RichLog)
+        status_widget = self.query_one("#query-status", Static)
+        progress_bar = self.query_one("#query-progress", ProgressBar)
+
+        progress_bar.display = True
+        progress_bar.update(progress=0)
+
+        # Load facts
+        status_widget.update("[bold cyan]📄 Loading all facts...[/bold cyan]")
+        await asyncio.sleep(0)
+
+        facts = await self._load_all_facts()
+        total_facts = len(facts)
+
+        # Map phase: Process in batches
+        batch_size = 500
+        num_batches = (total_facts + batch_size - 1) // batch_size
+
+        results_log.write(f"[bold cyan]📊 Processing {total_facts} facts in {num_batches} batches...[/bold cyan]")
+
+        relevant_insights = []
+        relevant_fact_numbers = set()
+
+        for batch_num in range(num_batches):
+            start_idx = batch_num * batch_size
+            end_idx = min(start_idx + batch_size, total_facts)
+            batch_facts = facts[start_idx:end_idx]
+
+            # Update progress
+            progress = int((batch_num / num_batches) * 70)  # 0-70% for map phase
+            progress_bar.update(progress=progress)
+            status_widget.update(f"[bold cyan]🔍 Batch {batch_num + 1}/{num_batches}: Analyzing facts {start_idx + 1}-{end_idx}...[/bold cyan]")
+            await asyncio.sleep(0)
+
+            # Process this batch
+            batch_result = await self._process_fact_batch(
+                batch_facts,
+                start_idx,
+                query
+            )
+
+            if batch_result:
+                relevant_insights.append(batch_result["insights"])
+                relevant_fact_numbers.update(batch_result["relevant_facts"])
+
+        # Reduce phase: Synthesize insights
+        progress_bar.update(progress=75)
+        status_widget.update(f"[bold cyan]🧩 Synthesizing insights from {len(relevant_fact_numbers)} relevant facts...[/bold cyan]")
+        await asyncio.sleep(0)
+
+        results_log.write(f"[dim]Found {len(relevant_fact_numbers)} relevant facts across all batches[/dim]")
+
+        # Build final answer using accumulated insights
+        final_answer = await self._synthesize_final_answer(
+            query,
+            relevant_insights,
+            relevant_fact_numbers,
+            facts
+        )
+
+        progress_bar.update(progress=100)
+        progress_bar.display = False
+
+        return final_answer
+
+    async def _execute_query_with_facts(
+        self,
+        query: str,
+        chunk_budget: int = 10000,
+        history_budget: int = 10000,
+        max_facts: Optional[int] = None
+    ) -> str:
+        """
+        Execute a query with specified facts and budgets.
+
+        Args:
+            query: User query string
+            chunk_budget: Token budget for chunks
+            history_budget: Token budget for conversation history
+            max_facts: Maximum number of facts to include (None = all facts)
+
+        Raises:
+            Exception: If context limit exceeded
+        """
         try:
             # Helper function to update UI from async worker
             async def update_progress(stage_progress: int, status_text: str):
@@ -357,17 +680,29 @@ class QueryScreen(Screen):
             if not facts:
                 raise ValueError("No facts found in file")
 
-            # Store facts for interactive clicking
+            # Store all facts for interactive clicking (always need full list)
             self.current_facts = facts
 
             total_facts = len(facts)
-            await update_progress(20, f"🔨 Building context from {total_facts} facts...")
 
-            # Stage 3: Build context from all facts (20-40%)
-            facts_context = "Here are the extracted facts:\n\n"
+            # Stage 3: Filter facts by query relevance and build context (20-40%)
+            # Filter facts if max_facts is specified
+            filtered_facts = self._filter_facts_by_query(facts, query, max_facts)
+            facts_to_use = len(filtered_facts)
 
-            # Process all facts (removed 100 limit)
-            for i, fact in enumerate(facts, 1):
+            if max_facts is not None and facts_to_use < total_facts:
+                await update_progress(20, f"🔨 Selecting top {facts_to_use} of {total_facts} facts...")
+            else:
+                await update_progress(20, f"🔨 Building context from {total_facts} facts...")
+
+            # Use compressed format to save tokens (critical for large documents)
+            facts_context = "Facts"
+            if max_facts is not None and facts_to_use < total_facts:
+                facts_context += f" (top {facts_to_use} of {total_facts}, most relevant)"
+            facts_context += ":\n"
+
+            # Process filtered facts - use compressed format to save ~30% tokens
+            for i, fact in enumerate(filtered_facts, 1):
                 claim = fact.get("claim", "")
                 location = fact.get("source_location", "")
 
@@ -382,21 +717,20 @@ class QueryScreen(Screen):
                     # V4 format: single quote
                     evidence = fact.get("evidence_quote", "")
 
-                facts_context += f"{i}. {claim}\n   Source: {location}\n   Evidence: {evidence}\n\n"
+                # Compressed format: [N] Claim | Location | Evidence
+                # Saves ~30% tokens vs verbose format
+                facts_context += f"[{i}] {claim} | {location} | {evidence}\n"
 
                 # Update progress every 10 facts to avoid too many UI updates
-                if i % 10 == 0 or i == total_facts:
-                    current_progress = 20 + int((i / total_facts) * 20)
+                if i % 10 == 0 or i == facts_to_use:
+                    current_progress = 20 + int((i / facts_to_use) * 20)
                     self.query_one("#query-progress", ProgressBar).update(progress=current_progress)
                     await asyncio.sleep(0)  # Yield to event loop
 
             await update_progress(40, f"🧩 Building chunk context from source documents...")
 
             # Stage 4: Build chunk context for richer responses (40-50%)
-            # Reserve token budget: conversation history gets half, chunks get half
-            conversation_budget = max_conversation_tokens // 2
-            chunk_budget = max_conversation_tokens // 2
-
+            # Use separate budgets for chunks and conversation history
             # Build chunk context from facts
             chunk_context, used_chunks = self.chunk_manager.build_chunk_context(
                 facts=facts,
@@ -407,13 +741,14 @@ class QueryScreen(Screen):
             # Store chunks for display in context panel
             self.current_chunks = used_chunks
 
-            await update_progress(50, f"🤖 Querying Claude with {total_facts} facts and {len(used_chunks)} source chunks...")
+            chunk_info = f"{len(used_chunks)} source chunks" if chunk_budget > 0 else "no chunks"
+            await update_progress(50, f"🤖 Querying Claude with {facts_to_use} facts and {chunk_info}...")
 
             # Stage 5: Query Claude (50-100%)
             # Animation pattern: 50% -> 90% over 15s, then 1%/5s to 99%, then 100% when done
 
             # Build conversation context using sliding window with specified token budget
-            conversation_context = self._build_conversation_context(max_tokens=conversation_budget)
+            conversation_context = self._build_conversation_context(max_tokens=history_budget)
 
             # Create prompt for Claude with enhanced multi-hop reasoning support
             prompt_parts = [facts_context]
@@ -425,13 +760,13 @@ class QueryScreen(Screen):
             if conversation_context:
                 prompt_parts.append(conversation_context)
 
-            prompt_parts.append("""Based on the facts above and the full context from source documents, please answer the following question.
+            prompt_parts.append("""Answer the following question using the facts above. Facts are in format: [N] Claim | Location | Evidence
 
 When answering:
-- Include citations to specific fact numbers in your answer (e.g., "According to Fact 3...")
-- Use the full chunk context to find connections between facts across different sections and documents
-- Draw insights by combining related information from multiple sources (multi-hop reasoning)
-- If you find relevant details in the chunk context that aren't captured in the extracted facts, include them in your answer""")
+- Cite fact numbers (e.g., "According to Fact 3..." or "As stated in [15]...")
+- Use chunk context to find connections across sections/documents (multi-hop reasoning)
+- Include relevant details from chunks not captured in extracted facts
+- Synthesize information from multiple facts when relevant""")
 
             if conversation_context:
                 prompt_parts.append("""If this question references previous answers (e.g., "it", "that", "the document"), use the conversation history to understand the context.""")
@@ -441,8 +776,10 @@ When answering:
             prompt = "\n\n".join(prompt_parts)
 
             # Run claude command asynchronously
+            # Pass prompt via stdin to avoid ARG_MAX limitations with large prompts
             process = await asyncio.create_subprocess_exec(
-                "claude", "-p", prompt,
+                "claude", "-p",
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
@@ -469,13 +806,18 @@ When answering:
             animation_task = asyncio.create_task(animate_progress())
 
             try:
-                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=60)
+                # Send prompt via stdin and wait for response
+                # Use longer timeout for large prompts (3 minutes)
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(input=prompt.encode('utf-8')),
+                    timeout=180
+                )
                 stdout_text = stdout.decode('utf-8')
                 stderr_text = stderr.decode('utf-8')
             except asyncio.TimeoutError:
                 process.kill()
                 await process.wait()
-                raise RuntimeError("Query timed out")
+                raise RuntimeError(f"Query timed out after 180 seconds. Prompt size: {len(prompt)} bytes")
             finally:
                 # Cancel animation task
                 animation_task.cancel()
@@ -492,7 +834,10 @@ When answering:
                 return stdout_text
             else:
                 # Raise error so retry logic can catch it
-                raise RuntimeError(f"Error running query: {stderr_text}")
+                error_msg = stderr_text.strip() if stderr_text.strip() else stdout_text.strip()
+                if not error_msg:
+                    error_msg = f"Claude CLI exited with code {process.returncode} but provided no error message. Prompt size: {len(prompt)} bytes"
+                raise RuntimeError(f"Error running query: {error_msg}")
 
         except Exception as e:
             # Re-raise exception so retry logic can handle it
@@ -613,76 +958,55 @@ When answering:
         chunk_panel.write(f"[dim]Lines {chunk.line_start}-{chunk.line_end}[/dim]")
         chunk_panel.write("")  # Blank line
 
-        # STRATEGY 1: Use line numbers directly from source_location (most reliable!)
-        source_location = fact.get("source_location", "")
-        line_match = re.search(r'[Ll]ines?\s+(\d+)(?:-(\d+))?', source_location)
+        # STRATEGY 1: Search for evidence text in chunk (most reliable!)
+        # Note: Line numbers in source_location are often incorrect due to:
+        # 1. Adaptive chunking makes chunk line calculations unreliable
+        # 2. Facts inherit chunk's line range, not precise evidence location
+        # Therefore, we search for evidence text directly instead of using line numbers
 
         focused_text = None
         successful_strategy = None
+        search_attempts = []
 
-        if line_match:
-            target_start = int(line_match.group(1))
-            target_end = int(line_match.group(2)) if line_match.group(2) else target_start
+        # Try evidence quotes
+        if "evidence_quotes" in fact and fact["evidence_quotes"]:
+            evidence_texts = [eq["quote"] for eq in fact["evidence_quotes"] if isinstance(eq, dict)]
+            if evidence_texts:
+                search_attempts.append(("evidence quotes", evidence_texts))
+        elif "evidence_quote" in fact and fact["evidence_quote"]:
+            search_attempts.append(("evidence quote", [fact["evidence_quote"]]))
 
-            # Check if these lines are in the chunk
-            if chunk.line_start <= target_start <= chunk.line_end:
-                # Use direct line number display
-                focused_text = self.chunk_manager.get_lines_in_range(
-                    chunk.text,
-                    target_start,
-                    target_end,
-                    context_lines=5,
-                    chunk_start_line=chunk.line_start
-                )
+        # Try claim text
+        claim = fact.get('claim', '')
+        if claim:
+            claim_words = claim.split()
+            if len(claim_words) >= 5:
+                search_attempts.append(("full claim", [claim]))
+                mid = len(claim_words) // 2
+                first_half = ' '.join(claim_words[:mid+2])
+                second_half = ' '.join(claim_words[mid-2:])
+                if len(first_half.split()) >= 4:
+                    search_attempts.append(("first half of claim", [first_half]))
+                if len(second_half.split()) >= 4:
+                    search_attempts.append(("second half of claim", [second_half]))
 
-                if focused_text and "outside chunk range" not in focused_text.lower():
-                    successful_strategy = ("exact line numbers", f"Lines {target_start}-{target_end}")
-                    chunk_panel.write(f"[dim]Showing lines {target_start}-{target_end} from source_location[/dim]")
-                    chunk_panel.write("")  # Blank line
+        # Try each search strategy
+        for strategy_name, search_texts in search_attempts:
+            focused_text = self.chunk_manager.get_focused_context(
+                chunk.text,
+                search_texts,
+                context_lines=5,
+                start_line_num=chunk.line_start
+            )
 
-        # STRATEGY 2: Fall back to text search if line numbers didn't work
-        if not successful_strategy:
-            search_attempts = []
+            if focused_text and "not found" not in focused_text.lower():
+                successful_strategy = (strategy_name, search_texts[0] if search_texts else "")
+                preview = search_texts[0][:60] + "..." if len(search_texts[0]) > 60 else search_texts[0]
+                chunk_panel.write(f"[dim]Found using {strategy_name}: \"{preview}\"[/dim]")
+                chunk_panel.write("")  # Blank line
+                break
 
-            # Try evidence quotes
-            if "evidence_quotes" in fact and fact["evidence_quotes"]:
-                evidence_texts = [eq["quote"] for eq in fact["evidence_quotes"] if isinstance(eq, dict)]
-                if evidence_texts:
-                    search_attempts.append(("evidence quotes", evidence_texts))
-            elif "evidence_quote" in fact and fact["evidence_quote"]:
-                search_attempts.append(("evidence quote", [fact["evidence_quote"]]))
-
-            # Try claim text
-            claim = fact.get('claim', '')
-            if claim:
-                claim_words = claim.split()
-                if len(claim_words) >= 5:
-                    search_attempts.append(("full claim", [claim]))
-                    mid = len(claim_words) // 2
-                    first_half = ' '.join(claim_words[:mid+2])
-                    second_half = ' '.join(claim_words[mid-2:])
-                    if len(first_half.split()) >= 4:
-                        search_attempts.append(("first half of claim", [first_half]))
-                    if len(second_half.split()) >= 4:
-                        search_attempts.append(("second half of claim", [second_half]))
-
-            # Try each search strategy
-            for strategy_name, search_texts in search_attempts:
-                focused_text = self.chunk_manager.get_focused_context(
-                    chunk.text,
-                    search_texts,
-                    context_lines=5,
-                    start_line_num=chunk.line_start
-                )
-
-                if focused_text and "not found" not in focused_text.lower():
-                    successful_strategy = (strategy_name, search_texts[0] if search_texts else "")
-                    preview = search_texts[0][:60] + "..." if len(search_texts[0]) > 60 else search_texts[0]
-                    chunk_panel.write(f"[dim]Found using {strategy_name}: \"{preview}\"[/dim]")
-                    chunk_panel.write("")  # Blank line
-                    break
-
-        # STRATEGY 3: Show full chunk if nothing worked
+        # STRATEGY 2: Show full chunk if nothing worked
         if not focused_text or "not found" in focused_text.lower():
             chunk_panel.write("[yellow]⚠️ Could not locate specific lines in chunk.[/yellow]")
             chunk_panel.write("[dim]Showing first 30 lines of chunk:[/dim]\n")
