@@ -32,7 +32,9 @@
       "Bash(test:*)",
       "Bash(osascript:*)",
       "Bash(claude:*)",
-      "Bash(getconf:*)"
+      "Bash(getconf:*)",
+      "Bash(lsof:*)",
+      "Bash(ps:*)"
     ],
     "deny": [],
     "ask": []

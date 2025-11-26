@@ -18,8 +18,15 @@ class ProcessingStage(str, Enum):
     EXTRACTED = "extracted"
     VALIDATING = "validating"
     VALIDATED = "validated"
-    FAILED = "failed"
     COMPLETED = "completed"
+    FAILED = "failed"
+    # Document-level stages (not per-chunk)
+    MULTIPASS_CUEC = "multipass_cuec"
+    MULTIPASS_TEST = "multipass_test"
+    MULTIPASS_QUANTITATIVE = "multipass_quantitative"
+    MULTIPASS_TECHNICAL = "multipass_technical"
+    GLOBAL_QV_CHECK = "global_qv_check"
+    FINALIZING = "finalizing"
 
 
 @dataclass
@@ -44,6 +51,7 @@ class DocumentProgress:
     started_at: str
     updated_at: str
     completed_at: Optional[str] = None
+    document_stage: Optional[ProcessingStage] = None  # For document-level stages (multipass, QV check)
 
     def get_stage_counts(self) -> Dict[str, int]:
         """Get count of chunks in each stage."""
@@ -57,18 +65,50 @@ class DocumentProgress:
         if self.total_chunks == 0:
             return 0.0
 
-        stage_weights = {
+        # Chunk-level stages (0-85% of total progress)
+        chunk_stage_weights = {
             ProcessingStage.PENDING: 0.0,
             ProcessingStage.EXTRACTING: 0.2,
             ProcessingStage.EXTRACTED: 0.4,
-            ProcessingStage.VALIDATING: 0.7,
-            ProcessingStage.VALIDATED: 0.9,
-            ProcessingStage.COMPLETED: 1.0,
+            ProcessingStage.VALIDATING: 0.65,
+            ProcessingStage.VALIDATED: 0.85,
+            ProcessingStage.COMPLETED: 0.85,
             ProcessingStage.FAILED: 0.0,
+            # Document-level stages don't apply to chunks
+            ProcessingStage.MULTIPASS_CUEC: 0.85,
+            ProcessingStage.MULTIPASS_TEST: 0.85,
+            ProcessingStage.MULTIPASS_QUANTITATIVE: 0.85,
+            ProcessingStage.MULTIPASS_TECHNICAL: 0.85,
+            ProcessingStage.GLOBAL_QV_CHECK: 0.85,
+            ProcessingStage.FINALIZING: 0.85,
         }
 
-        total_progress = sum(stage_weights[chunk.stage] for chunk in self.chunks.values())
-        return (total_progress / self.total_chunks) * 100
+        # Calculate chunk progress (0-85%)
+        chunk_progress = sum(chunk_stage_weights[chunk.stage] for chunk in self.chunks.values())
+        chunk_percentage = (chunk_progress / self.total_chunks) * 100 if self.total_chunks > 0 else 0
+
+        # Add document-level progress (85-100%)
+        document_progress = 0.0
+        if hasattr(self, 'document_stage') and self.document_stage:
+            if self.document_stage == ProcessingStage.MULTIPASS_CUEC:
+                document_progress = 85.0 + (0 * 2.5)  # 85%
+            elif self.document_stage == ProcessingStage.MULTIPASS_TEST:
+                document_progress = 85.0 + (1 * 2.5)  # 87.5%
+            elif self.document_stage == ProcessingStage.MULTIPASS_QUANTITATIVE:
+                document_progress = 85.0 + (2 * 2.5)  # 90%
+            elif self.document_stage == ProcessingStage.MULTIPASS_TECHNICAL:
+                document_progress = 85.0 + (3 * 2.5)  # 92.5%
+            elif self.document_stage == ProcessingStage.GLOBAL_QV_CHECK:
+                document_progress = 95.0
+            elif self.document_stage == ProcessingStage.FINALIZING:
+                document_progress = 98.0
+            else:
+                document_progress = 0.0
+
+        # If all chunks completed, use document-level progress
+        if chunk_percentage >= 85.0:
+            return document_progress if document_progress > 85.0 else chunk_percentage
+        return chunk_percentage
 
 
 class ProgressTracker:
@@ -133,6 +173,7 @@ class ProgressTracker:
                 started_at=data["started_at"],
                 updated_at=data["updated_at"],
                 completed_at=data.get("completed_at"),
+                document_stage=ProcessingStage(data["document_stage"]) if data.get("document_stage") else None,
             )
 
             return self.progress
@@ -198,6 +239,20 @@ class ProgressTracker:
         self.progress.updated_at = datetime.now().isoformat()
         self._save()
 
+    def update_document_stage(self, stage: ProcessingStage) -> None:
+        """
+        Update the document-level processing stage (multipass, QV check, etc.).
+
+        Args:
+            stage: Document-level processing stage
+        """
+        if not self.progress:
+            raise RuntimeError("Progress not initialized. Call initialize() first.")
+
+        self.progress.document_stage = stage
+        self.progress.updated_at = datetime.now().isoformat()
+        self._save()
+
     def _save(self) -> None:
         """Save progress to disk with file locking to prevent race conditions."""
         if not self.progress:
@@ -227,6 +282,7 @@ class ProgressTracker:
             "started_at": self.progress.started_at,
             "updated_at": self.progress.updated_at,
             "completed_at": self.progress.completed_at,
+            "document_stage": self.progress.document_stage.value if self.progress.document_stage else None,
         }
 
         # Use a lock file to prevent concurrent writes from parallel workers

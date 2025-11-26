@@ -2177,8 +2177,30 @@ Extract all {pass_type} facts. RESPOND ONLY WITH A VALID JSON ARRAY:"""
             specialized_passes = ["cuec", "test_procedures", "quantitative", "technical_specs"]
             multipass_facts = []
 
-            for pass_type in specialized_passes:
-                logger.info(f"Starting specialized pass: {pass_type}")
+            # Map pass types to progress stages
+            from frfr.progress import ProcessingStage
+            pass_stage_map = {
+                "cuec": ProcessingStage.MULTIPASS_CUEC,
+                "test_procedures": ProcessingStage.MULTIPASS_TEST,
+                "quantitative": ProcessingStage.MULTIPASS_QUANTITATIVE,
+                "technical_specs": ProcessingStage.MULTIPASS_TECHNICAL,
+            }
+
+            for pass_index, pass_type in enumerate(specialized_passes):
+                # Update progress tracker for this pass
+                pass_stage = pass_stage_map[pass_type]
+                progress_tracker.update_document_stage(pass_stage)
+
+                logger.info(f"Starting specialized pass {pass_index + 1}/4: {pass_type}")
+
+                # Update progress callback
+                if progress_callback:
+                    progress_callback(
+                        pass_index,
+                        len(specialized_passes),
+                        f"Specialized pass: {pass_type} ({pass_index + 1}/4)"
+                    )
+
                 pass_facts = []
 
                 # Run specialized extraction on each chunk
@@ -2215,6 +2237,17 @@ Extract all {pass_type} facts. RESPOND ONLY WITH A VALID JSON ARRAY:"""
         logger.info("=" * 60)
         logger.info("V4.7: Global QV Coverage Check")
         logger.info("=" * 60)
+
+        # Update progress tracker for global QV check
+        progress_tracker.update_document_stage(ProcessingStage.GLOBAL_QV_CHECK)
+
+        # Update progress callback
+        if progress_callback:
+            progress_callback(
+                0,
+                1,
+                "Global QV Coverage Check"
+            )
 
         total_facts = len(all_facts)
         qv_facts_count = sum(1 for f in all_facts if f.quantitative_values and len(f.quantitative_values) > 0)
@@ -2351,6 +2384,17 @@ Extract all {pass_type} facts. RESPOND ONLY WITH A VALID JSON ARRAY:"""
             logger.info(f"✅ Global QV coverage target met! ({global_qv_coverage:.1f}% >= {GLOBAL_TARGET_QV_COVERAGE * 100:.1f}%)")
 
         logger.info("=" * 60)
+
+        # Update progress tracker for finalization
+        progress_tracker.update_document_stage(ProcessingStage.FINALIZING)
+
+        # Update progress callback
+        if progress_callback:
+            progress_callback(
+                1,
+                1,
+                "Finalizing extraction results"
+            )
 
         # Create result
         result = FactExtractionResult(

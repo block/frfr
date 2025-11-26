@@ -228,12 +228,43 @@ class ProcessingScreen(Screen):
                             if current % 10 == 0 or current == 1 or current == total or facts_extracted_match:
                                 log.write(f"[dim]Chunk {current}/{total}{facts_info}[/dim]")
 
+                        # Parse multipass extraction
+                        multipass_match = re.search(r'Starting specialized pass\s+(\d+)/(\d+):\s+(\w+)', line_text)
+                        if multipass_match:
+                            current_pass = int(multipass_match.group(1))
+                            total_passes = int(multipass_match.group(2))
+                            pass_type = multipass_match.group(3)
+
+                            # Calculate progress: 85% + (pass_number - 1) * 2.5%
+                            multipass_progress = 85 + ((current_pass - 1) * 2.5)
+                            progress.update(progress=multipass_progress)
+
+                            status.update(f"Multipass extraction: {pass_type} ({current_pass}/{total_passes})")
+                            log.write(f"[magenta]✓ Specialized pass {current_pass}/{total_passes}: {pass_type}[/magenta]")
+
+                        # Parse global QV coverage check
+                        if "Global QV Coverage Check" in line_text:
+                            progress.update(progress=95)
+                            status.update("Global QV coverage check...")
+                            log.write(f"[cyan]{line_text}[/cyan]")
+
+                        # Parse QV coverage messages
+                        qv_coverage_match = re.search(r'Global QV Coverage:\s+([\d.]+)%', line_text)
+                        if qv_coverage_match:
+                            coverage = qv_coverage_match.group(1)
+                            log.write(f"[cyan]QV Coverage: {coverage}%[/cyan]")
+
                         # Parse final extraction results
                         total_facts_match = re.search(r'Total Facts.*?(\d+)', line_text)
                         if total_facts_match:
                             total_facts = int(total_facts_match.group(1))
                             self.total_facts_extracted = total_facts
                             log.write(f"[green bold]Total Facts Extracted: {total_facts}[/green bold]")
+
+                        # Parse finalization
+                        if "Finalizing extraction results" in line_text or "Extraction complete" in line_text:
+                            progress.update(progress=98)
+                            status.update("Finalizing results...")
 
                         # Show all output in real-time with color coding
                         if "Session:" in line_text or "sess_" in line_text:
@@ -419,18 +450,36 @@ class ProcessingScreen(Screen):
             total_recovered = sum(c.facts_recovered for c in progress.chunks.values())
             self.total_facts_extracted = total_valid
 
-            # Determine current stage
-            extracting = stage_counts.get("extracting", 0)
-            validating = stage_counts.get("validating", 0)
+            # Check for document-level stages first
+            document_stage = getattr(progress, 'document_stage', None)
+            if document_stage:
+                stage_value = document_stage.value if hasattr(document_stage, 'value') else str(document_stage)
 
-            if extracting > 0:
-                status.update("Extracting facts from chunks...")
-            elif validating > 0:
-                status.update("Validating and recovering facts...")
-            elif completed == total:
-                status.update("Processing complete!")
+                if stage_value == "multipass_cuec":
+                    status.update("Multipass extraction: CUEC (1/4)")
+                elif stage_value == "multipass_test":
+                    status.update("Multipass extraction: Test Procedures (2/4)")
+                elif stage_value == "multipass_quantitative":
+                    status.update("Multipass extraction: Quantitative (3/4)")
+                elif stage_value == "multipass_technical":
+                    status.update("Multipass extraction: Technical Specs (4/4)")
+                elif stage_value == "global_qv_check":
+                    status.update("Global QV coverage check...")
+                elif stage_value == "finalizing":
+                    status.update("Finalizing results...")
             else:
-                status.update("Processing chunks...")
+                # Fall back to chunk-level stage determination
+                extracting = stage_counts.get("extracting", 0)
+                validating = stage_counts.get("validating", 0)
+
+                if extracting > 0:
+                    status.update("Extracting facts from chunks...")
+                elif validating > 0:
+                    status.update("Validating and recovering facts...")
+                elif completed == total:
+                    status.update("Processing complete!")
+                else:
+                    status.update("Processing chunks...")
 
             # Update chunk info display
             chunk_percent = int((completed / total) * 100) if total > 0 else 0
