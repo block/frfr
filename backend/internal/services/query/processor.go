@@ -1,0 +1,478 @@
+package query
+
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/nesposito/frfr/internal/domain/models"
+	"github.com/nesposito/frfr/internal/services/claude"
+)
+
+// Processor handles query processing using facts and Claude API
+type Processor struct {
+	client       *claude.Client
+	chunkManager *ChunkManager
+	facts        []models.ExtractedFact
+}
+
+// NewProcessor creates a new query processor
+func NewProcessor(client *claude.Client, chunkManager *ChunkManager, facts []models.ExtractedFact) *Processor {
+	return &Processor{
+		client:       client,
+		chunkManager: chunkManager,
+		facts:        facts,
+	}
+}
+
+// QueryResult contains the result of a query
+type QueryResult struct {
+	Query   string         `json:"query"`
+	Answer  string         `json:"answer"`
+	Sources []SourceResult `json:"sources"`
+}
+
+// SourceResult contains evidence for a query answer
+type SourceResult struct {
+	Claim      string  `json:"claim"`
+	Quote      string  `json:"quote"`
+	Document   string  `json:"document"`
+	Location   string  `json:"location"`
+	Confidence float64 `json:"confidence"`
+	ChunkText  string  `json:"chunk_text,omitempty"`
+}
+
+// ProcessQuery processes a query and returns an answer with sources
+func (p *Processor) ProcessQuery(ctx context.Context, query string) (*QueryResult, error) {
+	if len(p.facts) == 0 {
+		return &QueryResult{
+			Query:   query,
+			Answer:  "No facts have been extracted from the documents yet.",
+			Sources: []SourceResult{},
+		}, nil
+	}
+
+	// Step 1: Use LLM to select relevant facts
+	relevantFacts, err := p.selectRelevantFactsWithLLM(ctx, query)
+	if err != nil {
+		// Fallback to keyword-based selection if LLM fails
+		relevantFacts = p.findRelevantFacts(query)
+	}
+
+	if len(relevantFacts) == 0 {
+		return &QueryResult{
+			Query:   query,
+			Answer:  "I couldn't find any relevant information in the documents to answer this question.",
+			Sources: []SourceResult{},
+		}, nil
+	}
+
+	// Step 2: Generate answer using Claude (with citation instructions)
+	answer, err := p.generateAnswer(ctx, query, relevantFacts)
+	if err != nil {
+		// Fallback to simple answer - use all facts
+		answer = p.simpleFallbackAnswer(query, relevantFacts)
+		sources := p.buildSources(relevantFacts)
+		return &QueryResult{
+			Query:   query,
+			Answer:  answer,
+			Sources: sources,
+		}, nil
+	}
+
+	// Parse which facts were actually cited in the answer
+	citedIndices := p.parseCitations(answer)
+
+	// Build sources only from cited facts
+	var citedFacts []models.ExtractedFact
+	for _, idx := range citedIndices {
+		if idx > 0 && idx <= len(relevantFacts) {
+			citedFacts = append(citedFacts, relevantFacts[idx-1]) // 1-indexed
+		}
+	}
+
+	// If no citations found, include all facts (Claude might not have followed format)
+	if len(citedFacts) == 0 {
+		citedFacts = relevantFacts
+	}
+
+	sources := p.buildSources(citedFacts)
+
+	return &QueryResult{
+		Query:   query,
+		Answer:  answer,
+		Sources: sources,
+	}, nil
+}
+
+// selectRelevantFactsWithLLM uses Claude to identify which facts are relevant to the query
+func (p *Processor) selectRelevantFactsWithLLM(ctx context.Context, query string) ([]models.ExtractedFact, error) {
+	if p.client == nil {
+		return nil, fmt.Errorf("no Claude client available")
+	}
+
+	// Build a compact list of facts for the LLM to evaluate
+	var sb strings.Builder
+	sb.WriteString("You are analyzing extracted facts from compliance/audit documents to find ones relevant to a user's question.\n\n")
+	sb.WriteString(fmt.Sprintf("Question: %s\n\n", query))
+	sb.WriteString("Think broadly about relevance. For example:\n")
+	sb.WriteString("- Questions about 'employee onboarding' relate to: hiring, background checks, training, orientation, access provisioning\n")
+	sb.WriteString("- Questions about 'security controls' relate to: encryption, access control, authentication, monitoring, policies\n")
+	sb.WriteString("- Questions about 'data protection' relate to: classification, encryption, privacy, handling procedures\n\n")
+	sb.WriteString("Facts:\n")
+
+	// Include all facts (they're just claims, so should fit)
+	for i, fact := range p.facts {
+		sb.WriteString(fmt.Sprintf("[%d] %s\n", i+1, fact.Claim))
+	}
+
+	sb.WriteString("\nReturn the numbers of ALL facts that could help answer the question, even if only partially relevant.\n")
+	sb.WriteString("Format: comma-separated numbers (e.g., 3, 7, 12, 15)\n")
+	sb.WriteString("If truly no facts are relevant, respond with: NONE\n")
+	sb.WriteString("\nRelevant fact numbers:")
+
+	response, err := p.client.Prompt(ctx, sb.String(), &claude.PromptOptions{
+		MaxTokens: 500,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse the response to get fact indices
+	response = strings.TrimSpace(response)
+	if strings.ToUpper(response) == "NONE" || response == "" {
+		return nil, nil
+	}
+
+	// Extract numbers from the response
+	numRe := regexp.MustCompile(`\d+`)
+	numStrs := numRe.FindAllString(response, -1)
+
+	var relevantFacts []models.ExtractedFact
+	seen := make(map[int]bool)
+
+	for _, numStr := range numStrs {
+		idx, err := strconv.Atoi(numStr)
+		if err != nil {
+			continue
+		}
+		// Convert 1-indexed to 0-indexed
+		idx--
+		if idx >= 0 && idx < len(p.facts) && !seen[idx] {
+			seen[idx] = true
+			relevantFacts = append(relevantFacts, p.facts[idx])
+		}
+	}
+
+	return relevantFacts, nil
+}
+
+// parseCitations extracts fact numbers cited in the answer (e.g., [1], [2, 5], [1, 4, 9])
+func (p *Processor) parseCitations(answer string) []int {
+	var cited []int
+	seen := make(map[int]bool)
+
+	// Match bracket contents: [1], [2, 5], [1, 4, 9], etc.
+	re := regexp.MustCompile(`\[([^\]]+)\]`)
+	matches := re.FindAllStringSubmatch(answer, -1)
+
+	// Extract all numbers from each bracket
+	numRe := regexp.MustCompile(`\d+`)
+
+	for _, match := range matches {
+		if len(match) >= 2 {
+			// Find all numbers within this bracket
+			nums := numRe.FindAllString(match[1], -1)
+			for _, numStr := range nums {
+				if num, err := strconv.Atoi(numStr); err == nil && !seen[num] {
+					cited = append(cited, num)
+					seen[num] = true
+				}
+			}
+		}
+	}
+
+	return cited
+}
+
+// findRelevantFacts finds facts relevant to the query
+func (p *Processor) findRelevantFacts(query string) []models.ExtractedFact {
+	queryLower := strings.ToLower(query)
+	queryWords := tokenize(queryLower)
+
+	// Filter out common stop words
+	stopWords := map[string]bool{
+		"the": true, "a": true, "an": true, "and": true, "or": true, "but": true,
+		"in": true, "on": true, "at": true, "to": true, "for": true, "of": true,
+		"with": true, "by": true, "from": true, "is": true, "are": true, "was": true,
+		"were": true, "been": true, "be": true, "have": true, "has": true, "had": true,
+		"do": true, "does": true, "did": true, "will": true, "would": true, "could": true,
+		"should": true, "may": true, "might": true, "must": true, "can": true,
+		"this": true, "that": true, "these": true, "those": true, "what": true,
+		"which": true, "who": true, "whom": true, "how": true, "when": true, "where": true,
+		"why": true, "all": true, "each": true, "every": true, "any": true, "some": true,
+	}
+
+	var significantWords []string
+	for _, word := range queryWords {
+		if len(word) >= 3 && !stopWords[word] {
+			significantWords = append(significantWords, word)
+		}
+	}
+
+	type scoredFact struct {
+		fact  models.ExtractedFact
+		score float64
+	}
+
+	var scored []scoredFact
+	for _, fact := range p.facts {
+		score := 0.0
+
+		// Build searchable text from all relevant fields
+		claimLower := strings.ToLower(fact.Claim)
+
+		// Get evidence text
+		var evidenceText string
+		if quote := fact.GetPrimaryQuote(); quote != "" {
+			evidenceText = strings.ToLower(quote)
+		}
+
+		// Build full searchable text
+		searchParts := []string{
+			claimLower,
+			evidenceText,
+			strings.ToLower(strings.Join(fact.Entities, " ")),
+			strings.ToLower(fact.FactType),
+			strings.ToLower(fact.ControlFamily),
+			strings.ToLower(fact.SectionContext),
+		}
+		fullText := strings.Join(searchParts, " ")
+
+		// Check for full query phrase match (highest value)
+		if strings.Contains(claimLower, queryLower) {
+			score += 10.0
+		} else if strings.Contains(fullText, queryLower) {
+			score += 5.0
+		}
+
+		// Score individual word matches
+		for _, word := range significantWords {
+			// Claim matches are most valuable
+			if strings.Contains(claimLower, word) {
+				score += 3.0
+				// Bonus for word appearing multiple times
+				score += float64(strings.Count(claimLower, word)-1) * 0.5
+			}
+			// Evidence matches are also valuable
+			if strings.Contains(evidenceText, word) {
+				score += 2.0
+			}
+			// Entity matches
+			for _, entity := range fact.Entities {
+				if strings.Contains(strings.ToLower(entity), word) {
+					score += 2.5
+					break
+				}
+			}
+			// Other field matches
+			if strings.Contains(strings.ToLower(fact.ControlFamily), word) {
+				score += 1.5
+			}
+			if strings.Contains(strings.ToLower(fact.SectionContext), word) {
+				score += 1.0
+			}
+		}
+
+		// Boost high confidence facts
+		if fact.Confidence >= 0.95 {
+			score *= 1.2
+		} else if fact.Confidence >= 0.9 {
+			score *= 1.1
+		}
+
+		// Boost facts with specific evidence
+		if len(fact.EvidenceQuotes) > 0 || fact.EvidenceQuote != "" {
+			score *= 1.1
+		}
+
+		if score > 0 {
+			scored = append(scored, scoredFact{fact: fact, score: score})
+		}
+	}
+
+	// Sort by score descending
+	for i := 0; i < len(scored); i++ {
+		for j := i + 1; j < len(scored); j++ {
+			if scored[j].score > scored[i].score {
+				scored[i], scored[j] = scored[j], scored[i]
+			}
+		}
+	}
+
+	// Return top 15 facts (give Claude more to work with)
+	var results []models.ExtractedFact
+	for i := 0; i < len(scored) && i < 15; i++ {
+		results = append(results, scored[i].fact)
+	}
+
+	return results
+}
+
+// buildSources builds source results from facts
+func (p *Processor) buildSources(facts []models.ExtractedFact) []SourceResult {
+	var sources []SourceResult
+
+	for _, fact := range facts {
+		source := SourceResult{
+			Claim:      fact.Claim,
+			Quote:      fact.GetPrimaryQuote(),
+			Document:   fact.SourceDoc,
+			Location:   fact.SourceLocation,
+			Confidence: fact.Confidence,
+		}
+
+		// Try to get chunk context using fact's ChunkID
+		if p.chunkManager != nil && fact.ChunkID != "" {
+			chunk := p.chunkManager.GetChunk(fact.SourceDoc, fact.ChunkID)
+			if chunk != nil {
+				source.ChunkText = chunk.Text
+			}
+		}
+
+		sources = append(sources, source)
+	}
+
+	return sources
+}
+
+// generateAnswer generates an answer using Claude
+func (p *Processor) generateAnswer(ctx context.Context, query string, facts []models.ExtractedFact) (string, error) {
+	if p.client == nil {
+		return "", fmt.Errorf("no Claude client available")
+	}
+
+	// Build prompt
+	var sb strings.Builder
+	sb.WriteString("Based on the following extracted facts from official documents, answer this question:\n\n")
+	sb.WriteString(fmt.Sprintf("Question: %s\n\n", query))
+	sb.WriteString("Available Facts:\n")
+
+	for i, fact := range facts {
+		sb.WriteString(fmt.Sprintf("[%d] %s\n", i+1, fact.Claim))
+		if fact.GetPrimaryQuote() != "" {
+			sb.WriteString(fmt.Sprintf("    Evidence: \"%s\"\n", fact.GetPrimaryQuote()))
+		}
+		sb.WriteString(fmt.Sprintf("    Source: %s, %s\n\n", fact.SourceDoc, fact.SourceLocation))
+	}
+
+	sb.WriteString("\nInstructions:\n")
+	sb.WriteString("1. Answer the question using ONLY the facts provided above.\n")
+	sb.WriteString("2. IMPORTANT: Cite your sources using [1], [2], etc. for each claim you make.\n")
+	sb.WriteString("3. Only cite facts that directly support your statements.\n")
+	sb.WriteString("4. If the facts don't fully answer the question, say what's missing.\n")
+	sb.WriteString("\nExample format: \"The system uses encryption [1] and requires authentication [3].\"\n")
+
+	response, err := p.client.Prompt(ctx, sb.String(), &claude.PromptOptions{
+		MaxTokens: 2000,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	return response, nil
+}
+
+// simpleFallbackAnswer generates a simple answer without Claude
+func (p *Processor) simpleFallbackAnswer(query string, facts []models.ExtractedFact) string {
+	if len(facts) == 0 {
+		return "No relevant information found in the documents."
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Based on the available documents:\n\n")
+
+	for _, fact := range facts {
+		sb.WriteString("- " + fact.Claim + "\n")
+	}
+
+	return sb.String()
+}
+
+// MultiPassQuery performs multi-pass query for more comprehensive results
+func (p *Processor) MultiPassQuery(ctx context.Context, query string, maxPasses int) (*QueryResult, error) {
+	if maxPasses <= 1 {
+		return p.ProcessQuery(ctx, query)
+	}
+
+	// First pass: initial query
+	result, err := p.ProcessQuery(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+
+	// Additional passes: refine based on initial results
+	for pass := 1; pass < maxPasses; pass++ {
+		// Generate follow-up query based on current results
+		followUp := p.generateFollowUpQuery(query, result)
+		if followUp == "" {
+			break
+		}
+
+		// Process follow-up
+		additionalResult, err := p.ProcessQuery(ctx, followUp)
+		if err != nil {
+			break
+		}
+
+		// Merge results
+		result = p.mergeResults(result, additionalResult)
+	}
+
+	return result, nil
+}
+
+// generateFollowUpQuery generates a follow-up query based on initial results
+func (p *Processor) generateFollowUpQuery(originalQuery string, result *QueryResult) string {
+	// Look for gaps in the answer
+	if strings.Contains(strings.ToLower(result.Answer), "not found") ||
+		strings.Contains(strings.ToLower(result.Answer), "no information") {
+		return ""
+	}
+
+	// For now, just return empty - could be enhanced with LLM-based follow-up generation
+	return ""
+}
+
+// mergeResults merges two query results
+func (p *Processor) mergeResults(r1, r2 *QueryResult) *QueryResult {
+	// Combine answers
+	combined := r1.Answer
+	if r2.Answer != "" && r2.Answer != r1.Answer {
+		combined += "\n\nAdditional findings:\n" + r2.Answer
+	}
+
+	// Merge sources, deduplicating
+	seenClaims := make(map[string]bool)
+	var sources []SourceResult
+	for _, s := range r1.Sources {
+		if !seenClaims[s.Claim] {
+			seenClaims[s.Claim] = true
+			sources = append(sources, s)
+		}
+	}
+	for _, s := range r2.Sources {
+		if !seenClaims[s.Claim] {
+			seenClaims[s.Claim] = true
+			sources = append(sources, s)
+		}
+	}
+
+	return &QueryResult{
+		Query:   r1.Query,
+		Answer:  combined,
+		Sources: sources,
+	}
+}
