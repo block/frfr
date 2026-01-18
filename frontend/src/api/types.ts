@@ -116,6 +116,21 @@ export interface QueryResponse {
   duration: string;
 }
 
+export interface BatchProgress {
+  phase: 'selecting' | 'answering';
+  total_batches: number;
+  completed: number;
+  running: number;
+  facts_found: number;
+}
+
+export interface QueryStreamCallbacks {
+  onProgress?: (progress: BatchProgress) => void;
+  onStatus?: (status: { message: string; totalFacts?: number }) => void;
+  onResult?: (result: QueryResponse) => void;
+  onError?: (error: { message: string }) => void;
+}
+
 export interface SourceEvidence {
   claim: string;
   quote: string;

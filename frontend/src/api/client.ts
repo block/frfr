@@ -11,6 +11,8 @@ import type {
   CreateSessionRequest,
   AddDocumentRequest,
   APIError,
+  BatchProgress,
+  QueryStreamCallbacks,
 } from './types';
 
 const API_BASE = '/api';
@@ -145,6 +147,99 @@ class APIClient {
       `/sessions/${sessionId}/query`,
       req
     );
+  }
+
+  // Streaming query with progress updates (falls back to non-streaming if needed)
+  submitQueryStream(
+    sessionId: string,
+    req: QueryRequest,
+    callbacks: QueryStreamCallbacks
+  ): () => void {
+    const controller = new AbortController();
+
+    // Use fetch with POST for SSE (EventSource only supports GET)
+    fetch(`${API_BASE}/sessions/${sessionId}/query/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'text/event-stream',
+      },
+      body: JSON.stringify(req),
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({
+            message: response.statusText,
+          }));
+          callbacks.onError?.({ message: error.message || 'Query failed' });
+          return;
+        }
+
+        const reader = response.body?.getReader();
+        if (!reader) {
+          // Fall back to non-streaming endpoint
+          console.warn('Streaming not supported, falling back to regular query');
+          this.submitQuery(sessionId, req)
+            .then((result) => callbacks.onResult?.(result))
+            .catch((err) => callbacks.onError?.({ message: err.message }));
+          return;
+        }
+
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          // Parse SSE events from buffer
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+          let eventType = '';
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              eventType = line.slice(7);
+            } else if (line.startsWith('data: ')) {
+              const data = line.slice(6);
+              try {
+                const parsed = JSON.parse(data);
+                switch (eventType) {
+                  case 'progress':
+                    callbacks.onProgress?.(parsed as BatchProgress);
+                    break;
+                  case 'status':
+                    callbacks.onStatus?.(parsed);
+                    break;
+                  case 'result':
+                    callbacks.onResult?.(parsed as QueryResponse);
+                    break;
+                  case 'error':
+                    callbacks.onError?.(parsed);
+                    break;
+                }
+              } catch (e) {
+                console.error('Failed to parse SSE data:', e);
+              }
+            }
+          }
+        }
+      })
+      .catch((error) => {
+        if (error.name !== 'AbortError') {
+          // Fall back to non-streaming on any error
+          console.warn('Stream error, falling back to regular query:', error);
+          this.submitQuery(sessionId, req)
+            .then((result) => callbacks.onResult?.(result))
+            .catch((err) => callbacks.onError?.({ message: err.message }));
+        }
+      });
+
+    // Return abort function
+    return () => controller.abort();
   }
 
   async getQueryHistory(sessionId: string): Promise<QueryHistoryEntry[]> {

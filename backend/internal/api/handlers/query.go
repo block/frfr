@@ -201,6 +201,173 @@ func (h *QueryHandler) Submit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// SubmitStream handles a query submission with SSE progress streaming
+func (h *QueryHandler) SubmitStream(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("id")
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "Session ID is required")
+		return
+	}
+
+	var req QueryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+
+	if req.Query == "" {
+		writeError(w, http.StatusBadRequest, "Query is required")
+		return
+	}
+
+	// Check session exists
+	if _, err := h.store.Get(sessionID); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeError(w, http.StatusNotFound, err.Error())
+		} else {
+			writeError(w, http.StatusInternalServerError, "Failed to get session: "+err.Error())
+		}
+		return
+	}
+
+	// Set up SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "Streaming not supported")
+		return
+	}
+
+	// Helper to send SSE events
+	sendEvent := func(eventType string, data interface{}) {
+		jsonData, _ := json.Marshal(data)
+		w.Write([]byte("event: " + eventType + "\n"))
+		w.Write([]byte("data: " + string(jsonData) + "\n\n"))
+		flusher.Flush()
+	}
+
+	start := time.Now()
+
+	// Load facts for the session
+	facts, err := h.store.LoadAllFacts(sessionID)
+	if err != nil {
+		sendEvent("error", map[string]string{"message": "Failed to load facts: " + err.Error()})
+		return
+	}
+
+	sendEvent("status", map[string]interface{}{
+		"message":    "Loaded facts",
+		"totalFacts": len(facts),
+	})
+
+	// Create Claude client and query processor
+	claudeClient := claude.NewClient(h.config.AnthropicAPIKey)
+	sessionDir := h.store.GetSessionDir(sessionID)
+	chunkManager := query.NewChunkManager(sessionDir)
+	chunkManager.LoadChunks()
+	processor := query.NewProcessor(claudeClient, chunkManager, facts)
+
+	// Set progress callback to stream batch updates
+	processor.SetProgressCallback(func(progress query.BatchProgress) {
+		sendEvent("progress", progress)
+	})
+
+	// Process query with Claude
+	ctx := context.Background()
+	maxPasses := req.MaxPasses
+	if maxPasses <= 0 {
+		maxPasses = 1
+	}
+
+	result, err := processor.MultiPassQuery(ctx, req.Query, maxPasses)
+	if err != nil {
+		sendEvent("error", map[string]string{"message": "Query processing failed: " + err.Error()})
+		return
+	}
+
+	// Convert to response format
+	var sources []SourceEvidence
+	for _, src := range result.Sources {
+		source := SourceEvidence{
+			Claim:      src.Claim,
+			Quote:      src.Quote,
+			Document:   src.Document,
+			Location:   src.Location,
+			Confidence: src.Confidence,
+			ChunkText:  src.ChunkText,
+		}
+
+		// Find quote position and trim context around it
+		if source.ChunkText != "" && source.Quote != "" {
+			idx := strings.Index(source.ChunkText, source.Quote)
+			quoteLen := len(source.Quote)
+
+			if idx < 0 {
+				idx, quoteLen = findQuoteWithNormalizedWhitespace(source.ChunkText, source.Quote)
+			}
+
+			if idx >= 0 {
+				contextChars := 250
+				ctxStart := idx - contextChars
+				if ctxStart < 0 {
+					ctxStart = 0
+				}
+				end := idx + quoteLen + contextChars
+				if end > len(source.ChunkText) {
+					end = len(source.ChunkText)
+				}
+
+				if ctxStart > 0 {
+					for ctxStart < idx && source.ChunkText[ctxStart] != ' ' && source.ChunkText[ctxStart] != '\n' {
+						ctxStart++
+					}
+					ctxStart++
+				}
+				if end < len(source.ChunkText) {
+					for end > idx+quoteLen && source.ChunkText[end-1] != ' ' && source.ChunkText[end-1] != '\n' {
+						end--
+					}
+				}
+
+				source.ChunkText = source.ChunkText[ctxStart:end]
+				newIdx := idx - ctxStart
+				source.Highlights = []int{newIdx, newIdx + quoteLen}
+			} else {
+				if len(source.ChunkText) > 500 {
+					source.ChunkText = source.ChunkText[:500] + "..."
+				}
+			}
+		}
+
+		sources = append(sources, source)
+	}
+
+	duration := time.Since(start)
+
+	// Store in history
+	historyEntry := models.QueryHistoryEntry{
+		Query:     req.Query,
+		Answer:    result.Answer,
+		Timestamp: time.Now(),
+	}
+	for _, s := range sources {
+		historyEntry.Sources = append(historyEntry.Sources, s.Document+":"+s.Location)
+	}
+	h.history[sessionID] = append(h.history[sessionID], historyEntry)
+
+	// Send final result
+	sendEvent("result", QueryResponse{
+		Query:    req.Query,
+		Answer:   result.Answer,
+		Sources:  sources,
+		Duration: duration.String(),
+	})
+}
+
 // History returns query history for a session
 func (h *QueryHandler) History(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")

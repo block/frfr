@@ -55,6 +55,7 @@ func (s *Server) registerRoutes() {
 
 	// Query
 	s.mux.HandleFunc("POST /api/sessions/{id}/query", queryHandler.Submit)
+	s.mux.HandleFunc("POST /api/sessions/{id}/query/stream", queryHandler.SubmitStream)
 	s.mux.HandleFunc("GET /api/sessions/{id}/query/history", queryHandler.History)
 
 	// Processing

@@ -11,11 +11,29 @@ import (
 	"github.com/nesposito/frfr/internal/services/claude"
 )
 
+// BatchProgress reports the status of parallel batch processing
+type BatchProgress struct {
+	Phase        string `json:"phase"` // "selecting" or "answering"
+	TotalBatches int    `json:"total_batches"`
+	Completed    int    `json:"completed"`
+	Running      int    `json:"running"`
+	FactsFound   int    `json:"facts_found"`
+}
+
+// ProgressCallback is called to report query progress
+type ProgressCallback func(BatchProgress)
+
 // Processor handles query processing using facts and Claude API
 type Processor struct {
 	client       *claude.Client
 	chunkManager *ChunkManager
 	facts        []models.ExtractedFact
+	onProgress   ProgressCallback
+}
+
+// SetProgressCallback sets the callback for progress updates
+func (p *Processor) SetProgressCallback(cb ProgressCallback) {
+	p.onProgress = cb
 }
 
 // NewProcessor creates a new query processor
@@ -107,13 +125,117 @@ func (p *Processor) ProcessQuery(ctx context.Context, query string) (*QueryResul
 	}, nil
 }
 
-// selectRelevantFactsWithLLM uses Claude to identify which facts are relevant to the query
+// selectRelevantFactsWithLLM uses Claude to identify which facts are relevant to the query.
+// For large fact sets, it splits into batches and processes them in parallel.
 func (p *Processor) selectRelevantFactsWithLLM(ctx context.Context, query string) ([]models.ExtractedFact, error) {
 	if p.client == nil {
 		return nil, fmt.Errorf("no Claude client available")
 	}
 
-	// Build a compact list of facts for the LLM to evaluate
+	const batchSize = 150 // Facts per batch - balances token limits with parallelism
+	numFacts := len(p.facts)
+
+	if numFacts == 0 {
+		return nil, nil
+	}
+
+	// Calculate number of batches needed
+	numBatches := (numFacts + batchSize - 1) / batchSize
+
+	// Report initial progress
+	if p.onProgress != nil {
+		p.onProgress(BatchProgress{
+			Phase:        "selecting",
+			TotalBatches: numBatches,
+			Completed:    0,
+			Running:      numBatches,
+			FactsFound:   0,
+		})
+	}
+
+	// Channel to collect results from parallel workers
+	type batchResult struct {
+		indices []int
+		err     error
+	}
+	results := make(chan batchResult, numBatches)
+
+	// Launch parallel workers for each batch
+	for batch := 0; batch < numBatches; batch++ {
+		startIdx := batch * batchSize
+		endIdx := startIdx + batchSize
+		if endIdx > numFacts {
+			endIdx = numFacts
+		}
+
+		go func(batchNum, start, end int) {
+			indices, err := p.evaluateFactBatch(ctx, query, start, end)
+			results <- batchResult{indices: indices, err: err}
+		}(batch, startIdx, endIdx)
+	}
+
+	// Collect results from all batches
+	var allRelevantIndices []int
+	var firstErr error
+	completed := 0
+
+	for i := 0; i < numBatches; i++ {
+		result := <-results
+		completed++
+		if result.err != nil && firstErr == nil {
+			firstErr = result.err
+		} else {
+			allRelevantIndices = append(allRelevantIndices, result.indices...)
+		}
+
+		// Report progress after each batch completes
+		if p.onProgress != nil {
+			p.onProgress(BatchProgress{
+				Phase:        "selecting",
+				TotalBatches: numBatches,
+				Completed:    completed,
+				Running:      numBatches - completed,
+				FactsFound:   len(allRelevantIndices),
+			})
+		}
+	}
+
+	// If all batches failed, return the error
+	if len(allRelevantIndices) == 0 && firstErr != nil {
+		return nil, firstErr
+	}
+
+	// Build the relevant facts list (preserving order by sorting indices)
+	seen := make(map[int]bool)
+	var uniqueIndices []int
+	for _, idx := range allRelevantIndices {
+		if !seen[idx] {
+			seen[idx] = true
+			uniqueIndices = append(uniqueIndices, idx)
+		}
+	}
+
+	// Sort to maintain document order
+	for i := 0; i < len(uniqueIndices); i++ {
+		for j := i + 1; j < len(uniqueIndices); j++ {
+			if uniqueIndices[j] < uniqueIndices[i] {
+				uniqueIndices[i], uniqueIndices[j] = uniqueIndices[j], uniqueIndices[i]
+			}
+		}
+	}
+
+	var relevantFacts []models.ExtractedFact
+	for _, idx := range uniqueIndices {
+		if idx >= 0 && idx < numFacts {
+			relevantFacts = append(relevantFacts, p.facts[idx])
+		}
+	}
+
+	return relevantFacts, nil
+}
+
+// evaluateFactBatch sends a batch of facts to Claude and returns relevant indices (0-indexed into p.facts)
+func (p *Processor) evaluateFactBatch(ctx context.Context, query string, startIdx, endIdx int) ([]int, error) {
 	var sb strings.Builder
 	sb.WriteString("You are analyzing extracted facts from compliance/audit documents to find ones relevant to a user's question.\n\n")
 	sb.WriteString(fmt.Sprintf("Question: %s\n\n", query))
@@ -123,14 +245,14 @@ func (p *Processor) selectRelevantFactsWithLLM(ctx context.Context, query string
 	sb.WriteString("- Questions about 'data protection' relate to: classification, encryption, privacy, handling procedures\n\n")
 	sb.WriteString("Facts:\n")
 
-	// Include all facts (they're just claims, so should fit)
-	for i, fact := range p.facts {
-		sb.WriteString(fmt.Sprintf("[%d] %s\n", i+1, fact.Claim))
+	// Number facts with their global index (1-indexed for display)
+	for i := startIdx; i < endIdx; i++ {
+		sb.WriteString(fmt.Sprintf("[%d] %s\n", i+1, p.facts[i].Claim))
 	}
 
 	sb.WriteString("\nReturn the numbers of ALL facts that could help answer the question, even if only partially relevant.\n")
 	sb.WriteString("Format: comma-separated numbers (e.g., 3, 7, 12, 15)\n")
-	sb.WriteString("If truly no facts are relevant, respond with: NONE\n")
+	sb.WriteString("If no facts in this batch are relevant, respond with: NONE\n")
 	sb.WriteString("\nRelevant fact numbers:")
 
 	response, err := p.client.Prompt(ctx, sb.String(), &claude.PromptOptions{
@@ -150,9 +272,7 @@ func (p *Processor) selectRelevantFactsWithLLM(ctx context.Context, query string
 	numRe := regexp.MustCompile(`\d+`)
 	numStrs := numRe.FindAllString(response, -1)
 
-	var relevantFacts []models.ExtractedFact
-	seen := make(map[int]bool)
-
+	var indices []int
 	for _, numStr := range numStrs {
 		idx, err := strconv.Atoi(numStr)
 		if err != nil {
@@ -160,13 +280,13 @@ func (p *Processor) selectRelevantFactsWithLLM(ctx context.Context, query string
 		}
 		// Convert 1-indexed to 0-indexed
 		idx--
-		if idx >= 0 && idx < len(p.facts) && !seen[idx] {
-			seen[idx] = true
-			relevantFacts = append(relevantFacts, p.facts[idx])
+		// Validate it's within this batch's range (mapped to global index)
+		if idx >= startIdx && idx < endIdx {
+			indices = append(indices, idx)
 		}
 	}
 
-	return relevantFacts, nil
+	return indices, nil
 }
 
 // parseCitations extracts fact numbers cited in the answer (e.g., [1], [2, 5], [1, 4, 9])

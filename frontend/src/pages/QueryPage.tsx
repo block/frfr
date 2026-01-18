@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../api/client';
-import type { QueryResponse, QueryHistoryEntry } from '../api/types';
+import type { QueryResponse, QueryHistoryEntry, BatchProgress } from '../api/types';
 import QueryInterface from '../components/query/QueryInterface';
 import SourceContextPanel from '../components/query/SourceContextPanel';
 
@@ -12,11 +12,18 @@ function QueryPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedSourceIndex, setSelectedSourceIndex] = useState<number | null>(null);
+  const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
+  const [totalFacts, setTotalFacts] = useState<number | null>(null);
+  const abortRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (sessionId) {
       loadHistory();
     }
+    // Cleanup on unmount
+    return () => {
+      abortRef.current?.();
+    };
   }, [sessionId]);
 
   const loadHistory = async () => {
@@ -29,20 +36,40 @@ function QueryPage() {
     }
   };
 
-  const handleQuery = async (query: string) => {
+  const handleQuery = (query: string) => {
     if (!sessionId) return;
-    try {
-      setLoading(true);
-      setError(null);
-      setSelectedSourceIndex(null);
-      const response = await api.submitQuery(sessionId, { query });
-      setCurrentResponse(response);
-      loadHistory(); // Refresh history
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Query failed');
-    } finally {
-      setLoading(false);
-    }
+
+    // Abort any existing query
+    abortRef.current?.();
+
+    setLoading(true);
+    setError(null);
+    setSelectedSourceIndex(null);
+    setCurrentResponse(null);
+    setBatchProgress(null);
+    setTotalFacts(null);
+
+    abortRef.current = api.submitQueryStream(sessionId, { query }, {
+      onStatus: (status) => {
+        if (status.totalFacts) {
+          setTotalFacts(status.totalFacts);
+        }
+      },
+      onProgress: (progress) => {
+        setBatchProgress(progress);
+      },
+      onResult: (result) => {
+        setCurrentResponse(result);
+        setLoading(false);
+        setBatchProgress(null);
+        loadHistory();
+      },
+      onError: (err) => {
+        setError(err.message);
+        setLoading(false);
+        setBatchProgress(null);
+      },
+    });
   };
 
   return (
@@ -64,6 +91,8 @@ function QueryPage() {
             error={error}
             response={currentResponse}
             onSourceClick={setSelectedSourceIndex}
+            batchProgress={batchProgress}
+            totalFacts={totalFacts}
           />
 
           {/* History */}
