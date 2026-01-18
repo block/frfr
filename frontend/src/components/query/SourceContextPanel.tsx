@@ -12,16 +12,74 @@ function SourceContextPanel({ source, onClose }: Props) {
       return <p className="text-muted">No source text available.</p>;
     }
 
-    if (!source.highlights || source.highlights.length < 2) {
+    const text = source.chunk_text;
+
+    // Find the quote in the chunk text ourselves (more reliable than backend offsets)
+    // This avoids byte/character/surrogate encoding mismatches between Go and JS
+    let start = -1;
+    let end = -1;
+
+    if (source.quote) {
+      // Try exact match first
+      start = text.indexOf(source.quote);
+      if (start >= 0) {
+        end = start + source.quote.length;
+      } else {
+        // Try normalized whitespace match
+        const normalizedQuote = source.quote.replace(/\s+/g, ' ').trim();
+        const normalizedText = text.replace(/\s+/g, ' ');
+        const normalizedIdx = normalizedText.indexOf(normalizedQuote);
+
+        if (normalizedIdx >= 0) {
+          // Map back to original text position
+          // Count original characters up to the normalized position
+          let origIdx = 0;
+          let normIdx = 0;
+          while (normIdx < normalizedIdx && origIdx < text.length) {
+            if (/\s/.test(text[origIdx])) {
+              // Skip whitespace in original, but only count one space in normalized
+              while (origIdx < text.length && /\s/.test(text[origIdx])) {
+                origIdx++;
+              }
+              normIdx++;
+            } else {
+              origIdx++;
+              normIdx++;
+            }
+          }
+          start = origIdx;
+
+          // Find end by matching the normalized quote length
+          let quoteOrigLen = 0;
+          normIdx = 0;
+          while (normIdx < normalizedQuote.length && (start + quoteOrigLen) < text.length) {
+            if (/\s/.test(text[start + quoteOrigLen])) {
+              while ((start + quoteOrigLen) < text.length && /\s/.test(text[start + quoteOrigLen])) {
+                quoteOrigLen++;
+              }
+              normIdx++;
+            } else {
+              quoteOrigLen++;
+              normIdx++;
+            }
+          }
+          end = start + quoteOrigLen;
+        }
+      }
+    }
+
+    // Fall back to backend hints if we couldn't find it
+    if (start < 0 && source.highlights && source.highlights.length >= 2) {
+      [start, end] = source.highlights;
+    }
+
+    if (start < 0 || end < 0 || start >= text.length) {
       return (
         <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.8125rem' }}>
-          {source.chunk_text}
+          {text}
         </pre>
       );
     }
-
-    const [start, end] = source.highlights;
-    const text = source.chunk_text;
 
     return (
       <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.8125rem' }}>

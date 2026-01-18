@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -13,6 +14,13 @@ import (
 	"github.com/nesposito/frfr/internal/services/query"
 	"github.com/nesposito/frfr/internal/services/session"
 )
+
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
 
 // QueryHandler handles query-related API requests
 type QueryHandler struct {
@@ -163,10 +171,14 @@ func (h *QueryHandler) Submit(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 
-				// Update chunk text and highlight positions
+				// Trim the chunk text
 				source.ChunkText = source.ChunkText[start:end]
+				// Convert byte offsets to rune (character) offsets for JavaScript
+				// JavaScript slice() works on UTF-16 code units, Go uses bytes
 				newIdx := idx - start
-				source.Highlights = []int{newIdx, newIdx + quoteLen}
+				runeStart := len([]rune(source.ChunkText[:newIdx]))
+				runeEnd := runeStart + len([]rune(source.ChunkText[newIdx:newIdx+quoteLen]))
+				source.Highlights = []int{runeStart, runeEnd}
 			} else {
 				// Quote not found - just show first ~500 chars
 				if len(source.ChunkText) > 500 {
@@ -333,14 +345,29 @@ func (h *QueryHandler) SubmitStream(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 
+				// Trim the chunk text
 				source.ChunkText = source.ChunkText[ctxStart:end]
+				// Convert byte offsets to rune (character) offsets for JavaScript
+				// JavaScript slice() works on UTF-16 code units, Go uses bytes
 				newIdx := idx - ctxStart
-				source.Highlights = []int{newIdx, newIdx + quoteLen}
+				runeStart := len([]rune(source.ChunkText[:newIdx]))
+				runeEnd := runeStart + len([]rune(source.ChunkText[newIdx:newIdx+quoteLen]))
+				source.Highlights = []int{runeStart, runeEnd}
 			} else {
+				// Debug: quote not found - show assigned chunk info
+				log.Printf("[DEBUG] Source %d: quote not found. Doc=%s Loc=%s ChunkText len=%d",
+					len(sources)+1, source.Document, source.Location, len(source.ChunkText))
+				log.Printf("  Quote (first 80): %q", truncateStr(source.Quote, 80))
+				log.Printf("  ChunkText (first 80): %q", truncateStr(source.ChunkText, 80))
+
 				if len(source.ChunkText) > 500 {
 					source.ChunkText = source.ChunkText[:500] + "..."
 				}
 			}
+		} else if source.ChunkText == "" {
+			log.Printf("[DEBUG] Source %d: no chunk text available", len(sources)+1)
+		} else if source.Quote == "" {
+			log.Printf("[DEBUG] Source %d: no quote available", len(sources)+1)
 		}
 
 		sources = append(sources, source)
@@ -395,7 +422,7 @@ func (h *QueryHandler) History(w http.ResponseWriter, r *http.Request) {
 }
 
 // findQuoteWithNormalizedWhitespace finds a quote in text by normalizing whitespace.
-// Returns the start index in the original text and the length of the matched span,
+// Returns the start BYTE index in the original text and the BYTE length of the matched span,
 // or (-1, 0) if not found.
 func findQuoteWithNormalizedWhitespace(text, quote string) (int, int) {
 	// Normalize quote: collapse whitespace to single space
@@ -404,45 +431,50 @@ func findQuoteWithNormalizedWhitespace(text, quote string) (int, int) {
 		return -1, 0
 	}
 
-	// Build a normalized version of text and track original positions
-	textRunes := []rune(text)
+	// Build a normalized version of text and track original BYTE positions
+	// posMap[i] = byte offset in original text for the i-th rune in normalized text
 	var normalizedText strings.Builder
-	posMap := make([]int, 0, len(textRunes)) // maps normalized index to original index
+	var posMap []int
 
 	inWhitespace := false
-	for i, r := range textRunes {
+	for i, r := range text { // range over string gives byte offset i, rune r
 		if r == ' ' || r == '\n' || r == '\r' || r == '\t' {
 			if !inWhitespace {
 				normalizedText.WriteRune(' ')
-				posMap = append(posMap, i)
+				posMap = append(posMap, i) // i is byte offset
 				inWhitespace = true
 			}
 		} else {
 			normalizedText.WriteRune(r)
-			posMap = append(posMap, i)
+			posMap = append(posMap, i) // i is byte offset
 			inWhitespace = false
 		}
 	}
 
 	normalized := normalizedText.String()
-	idx := strings.Index(normalized, normalizedQuote)
-	if idx < 0 {
+
+	// Find quote in normalized text - get byte position
+	byteIdx := strings.Index(normalized, normalizedQuote)
+	if byteIdx < 0 {
 		return -1, 0
 	}
 
-	// Map back to original position
-	if idx >= len(posMap) {
+	// Convert byte index in normalized string to rune index for posMap lookup
+	runeIdx := len([]rune(normalized[:byteIdx]))
+
+	// Map back to original byte position
+	if runeIdx >= len(posMap) {
 		return -1, 0
 	}
-	origStart := posMap[idx]
+	origStart := posMap[runeIdx]
 
-	// Find end position
-	endIdx := idx + len(normalizedQuote)
+	// Find end position - need rune count in the normalized quote
+	endRuneIdx := runeIdx + len([]rune(normalizedQuote))
 	var origEnd int
-	if endIdx >= len(posMap) {
+	if endRuneIdx >= len(posMap) {
 		origEnd = len(text)
 	} else {
-		origEnd = posMap[endIdx]
+		origEnd = posMap[endRuneIdx]
 	}
 
 	return origStart, origEnd - origStart

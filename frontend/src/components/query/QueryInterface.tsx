@@ -133,7 +133,9 @@ function QueryInterface({ onSubmit, loading, error, response, onSourceClick, bat
         <div className="mt-4">
           <div className="flex justify-between items-center mb-2">
             <span className="text-sm font-medium">
-              {batchProgress.phase === 'selecting' ? 'Analyzing facts...' : 'Generating answer...'}
+              {batchProgress.phase === 'selecting'
+                ? 'Step 1: Analyzing facts in parallel...'
+                : 'Step 2: Generating answer from relevant facts...'}
             </span>
             <span className="text-xs text-muted">
               {totalFacts ? `${totalFacts} total facts` : ''}
@@ -153,74 +155,98 @@ function QueryInterface({ onSubmit, loading, error, response, onSourceClick, bat
             <div
               style={{
                 height: '100%',
-                width: `${(batchProgress.completed / batchProgress.total_batches) * 100}%`,
-                backgroundColor: 'var(--color-primary)',
+                width: batchProgress.phase === 'answering'
+                  ? '100%'
+                  : `${(batchProgress.completed / batchProgress.total_batches) * 100}%`,
+                backgroundColor: batchProgress.phase === 'answering'
+                  ? 'var(--color-success)'
+                  : 'var(--color-primary)',
                 transition: 'width 0.3s ease',
               }}
             />
           </div>
 
-          {/* Batch status grid */}
-          <div className="flex gap-4 text-sm">
-            <div className="flex items-center gap-2">
+          {batchProgress.phase === 'selecting' ? (
+            <>
+              {/* Batch status grid */}
+              <div className="flex gap-4 text-sm">
+                <div className="flex items-center gap-2">
+                  <div
+                    style={{
+                      width: '12px',
+                      height: '12px',
+                      borderRadius: '50%',
+                      backgroundColor: 'var(--color-primary)',
+                      animation: batchProgress.running > 0 ? 'pulse 1.5s infinite' : 'none',
+                    }}
+                  />
+                  <span>{batchProgress.running} running</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div
+                    style={{
+                      width: '12px',
+                      height: '12px',
+                      borderRadius: '50%',
+                      backgroundColor: 'var(--color-success)',
+                    }}
+                  />
+                  <span>{batchProgress.completed}/{batchProgress.total_batches} complete</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-muted">{batchProgress.facts_found} relevant facts found</span>
+                </div>
+              </div>
+
+              {/* Batch indicators */}
+              <div className="flex gap-1 mt-3 flex-wrap">
+                {Array.from({ length: batchProgress.total_batches }).map((_, i) => {
+                  const isComplete = i < batchProgress.completed;
+                  const isRunning = !isComplete && i < batchProgress.completed + batchProgress.running;
+                  return (
+                    <div
+                      key={i}
+                      title={`Batch ${i + 1}`}
+                      style={{
+                        width: '24px',
+                        height: '24px',
+                        borderRadius: '4px',
+                        backgroundColor: isComplete
+                          ? 'var(--color-success)'
+                          : isRunning
+                          ? 'var(--color-primary)'
+                          : 'var(--color-border)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '10px',
+                        color: isComplete || isRunning ? 'white' : 'var(--color-muted)',
+                        animation: isRunning ? 'pulse 1.5s infinite' : 'none',
+                      }}
+                    >
+                      {i + 1}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            /* Answering phase display */
+            <div className="flex items-center gap-3 text-sm">
               <div
                 style={{
-                  width: '12px',
-                  height: '12px',
+                  width: '16px',
+                  height: '16px',
                   borderRadius: '50%',
                   backgroundColor: 'var(--color-primary)',
-                  animation: batchProgress.running > 0 ? 'pulse 1.5s infinite' : 'none',
+                  animation: 'pulse 1.5s infinite',
                 }}
               />
-              <span>{batchProgress.running} running</span>
+              <span>
+                Passing {batchProgress.facts_found} relevant facts to Claude for final answer...
+              </span>
             </div>
-            <div className="flex items-center gap-2">
-              <div
-                style={{
-                  width: '12px',
-                  height: '12px',
-                  borderRadius: '50%',
-                  backgroundColor: 'var(--color-success)',
-                }}
-              />
-              <span>{batchProgress.completed}/{batchProgress.total_batches} complete</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-muted">{batchProgress.facts_found} relevant facts found</span>
-            </div>
-          </div>
-
-          {/* Batch indicators */}
-          <div className="flex gap-1 mt-3 flex-wrap">
-            {Array.from({ length: batchProgress.total_batches }).map((_, i) => {
-              const isComplete = i < batchProgress.completed;
-              const isRunning = !isComplete && i < batchProgress.completed + batchProgress.running;
-              return (
-                <div
-                  key={i}
-                  title={`Batch ${i + 1}`}
-                  style={{
-                    width: '24px',
-                    height: '24px',
-                    borderRadius: '4px',
-                    backgroundColor: isComplete
-                      ? 'var(--color-success)'
-                      : isRunning
-                      ? 'var(--color-primary)'
-                      : 'var(--color-border)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '10px',
-                    color: isComplete || isRunning ? 'white' : 'var(--color-muted)',
-                    animation: isRunning ? 'pulse 1.5s infinite' : 'none',
-                  }}
-                >
-                  {i + 1}
-                </div>
-              );
-            })}
-          </div>
+          )}
 
           <style>{`
             @keyframes pulse {

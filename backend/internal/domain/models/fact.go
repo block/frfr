@@ -20,8 +20,15 @@ type ExtractedFact struct {
 	// V4 backward compatibility
 	EvidenceQuote string `json:"evidence_quote,omitempty"`
 
-	// Chunk tracking (set at load time from filename)
-	ChunkID string `json:"chunk_id,omitempty"`
+	// Chunk tracking
+	ChunkID string `json:"chunk_id,omitempty"` // Set at extraction time, verified at load time
+
+	// Fact index - assigned sequentially during extraction and persisted
+	// This is the ground truth for fact ordering
+	FactIndex int `json:"fact_index,omitempty"`
+
+	// Global index in the facts list (computed at load time for comparison)
+	GlobalIndex int `json:"-"` // Not serialized - used to detect mismatches
 
 	// Metadata
 	FactType           string            `json:"fact_type,omitempty"`

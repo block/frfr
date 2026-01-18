@@ -88,6 +88,17 @@ func (p *Processor) ProcessQuery(ctx context.Context, query string) (*QueryResul
 	}
 
 	// Step 2: Generate answer using Claude (with citation instructions)
+	// Report that we're now in the answering phase
+	if p.onProgress != nil {
+		p.onProgress(BatchProgress{
+			Phase:        "answering",
+			TotalBatches: 1,
+			Completed:    0,
+			Running:      1,
+			FactsFound:   len(relevantFacts),
+		})
+	}
+
 	answer, err := p.generateAnswer(ctx, query, relevantFacts)
 	if err != nil {
 		// Fallback to simple answer - use all facts
@@ -100,23 +111,9 @@ func (p *Processor) ProcessQuery(ctx context.Context, query string) (*QueryResul
 		}, nil
 	}
 
-	// Parse which facts were actually cited in the answer
-	citedIndices := p.parseCitations(answer)
-
-	// Build sources only from cited facts
-	var citedFacts []models.ExtractedFact
-	for _, idx := range citedIndices {
-		if idx > 0 && idx <= len(relevantFacts) {
-			citedFacts = append(citedFacts, relevantFacts[idx-1]) // 1-indexed
-		}
-	}
-
-	// If no citations found, include all facts (Claude might not have followed format)
-	if len(citedFacts) == 0 {
-		citedFacts = relevantFacts
-	}
-
-	sources := p.buildSources(citedFacts)
+	// Return all relevant facts as sources so citation indices match
+	// (citations in answer like [3], [17] refer to relevantFacts indices)
+	sources := p.buildSources(relevantFacts)
 
 	return &QueryResult{
 		Query:   query,
@@ -174,8 +171,9 @@ func (p *Processor) selectRelevantFactsWithLLM(ctx context.Context, query string
 		}(batch, startIdx, endIdx)
 	}
 
-	// Collect results from all batches
-	var allRelevantIndices []int
+	// Collect results from all batches, deduplicating as we go
+	seen := make(map[int]bool)
+	var uniqueIndices []int
 	var firstErr error
 	completed := 0
 
@@ -185,34 +183,30 @@ func (p *Processor) selectRelevantFactsWithLLM(ctx context.Context, query string
 		if result.err != nil && firstErr == nil {
 			firstErr = result.err
 		} else {
-			allRelevantIndices = append(allRelevantIndices, result.indices...)
+			// Deduplicate as we collect
+			for _, idx := range result.indices {
+				if !seen[idx] {
+					seen[idx] = true
+					uniqueIndices = append(uniqueIndices, idx)
+				}
+			}
 		}
 
-		// Report progress after each batch completes
+		// Report progress after each batch completes (with deduplicated count)
 		if p.onProgress != nil {
 			p.onProgress(BatchProgress{
 				Phase:        "selecting",
 				TotalBatches: numBatches,
 				Completed:    completed,
 				Running:      numBatches - completed,
-				FactsFound:   len(allRelevantIndices),
+				FactsFound:   len(uniqueIndices),
 			})
 		}
 	}
 
 	// If all batches failed, return the error
-	if len(allRelevantIndices) == 0 && firstErr != nil {
+	if len(uniqueIndices) == 0 && firstErr != nil {
 		return nil, firstErr
-	}
-
-	// Build the relevant facts list (preserving order by sorting indices)
-	seen := make(map[int]bool)
-	var uniqueIndices []int
-	for _, idx := range allRelevantIndices {
-		if !seen[idx] {
-			seen[idx] = true
-			uniqueIndices = append(uniqueIndices, idx)
-		}
 	}
 
 	// Sort to maintain document order
@@ -454,11 +448,42 @@ func (p *Processor) buildSources(facts []models.ExtractedFact) []SourceResult {
 			Confidence: fact.Confidence,
 		}
 
-		// Try to get chunk context using fact's ChunkID
-		if p.chunkManager != nil && fact.ChunkID != "" {
-			chunk := p.chunkManager.GetChunk(fact.SourceDoc, fact.ChunkID)
-			if chunk != nil {
-				source.ChunkText = chunk.Text
+		// Try to get chunk context by searching for the quote in all chunks
+		// (ChunkID from filename can be unreliable due to parallel extraction)
+		if p.chunkManager != nil {
+			quote := fact.GetPrimaryQuote()
+			foundChunk := ""
+			if quote != "" {
+				// Search all chunks for this quote
+				chunk := p.chunkManager.FindChunkContainingQuote(fact.SourceDoc, quote)
+				if chunk != nil {
+					source.ChunkText = chunk.Text
+					foundChunk = chunk.ChunkID
+				}
+			}
+
+			// Fallback to ChunkID if quote search fails
+			if source.ChunkText == "" && fact.ChunkID != "" {
+				chunk := p.chunkManager.GetChunk(fact.SourceDoc, fact.ChunkID)
+				if chunk != nil {
+					source.ChunkText = chunk.Text
+					foundChunk = fact.ChunkID + " (fallback)"
+				}
+			}
+
+			// Debug: compare FactIndex (stored) vs GlobalIndex (computed at load)
+			// If they differ, facts were saved to wrong files or loaded in wrong order
+			if fact.FactIndex > 0 && fact.FactIndex != fact.GlobalIndex {
+				fmt.Printf("[DEBUG] INDEX MISMATCH: FactIndex=%d (stored) vs GlobalIndex=%d (loaded), ChunkID=%s\n",
+					fact.FactIndex, fact.GlobalIndex, fact.ChunkID)
+			}
+
+			if source.ChunkText == "" {
+				fmt.Printf("[DEBUG] Fact#%d (ChunkID=%s, Loc=%s): NO CHUNK FOUND, quote=%q\n",
+					fact.FactIndex, fact.ChunkID, fact.SourceLocation, truncateString(quote, 40))
+			} else if foundChunk != fact.ChunkID {
+				fmt.Printf("[DEBUG] Fact#%d: ChunkID mismatch - stored as %s but quote found in %s\n",
+					fact.FactIndex, fact.ChunkID, foundChunk)
 			}
 		}
 
@@ -564,6 +589,14 @@ func (p *Processor) generateFollowUpQuery(originalQuery string, result *QueryRes
 
 	// For now, just return empty - could be enhanced with LLM-based follow-up generation
 	return ""
+}
+
+// truncateString truncates a string to maxLen characters
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 // mergeResults merges two query results

@@ -2,6 +2,7 @@ package query
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -66,6 +67,28 @@ func (m *ChunkManager) LoadChunks() error {
 		}
 	}
 
+	// Debug: show loaded chunk keys and sizes
+	if len(m.chunks) > 0 {
+		fmt.Printf("[DEBUG] ChunkManager loaded %d chunks:\n", len(m.chunks))
+		// Sort keys to see them in order
+		var keys []string
+		for key := range m.chunks {
+			keys = append(keys, key)
+		}
+		// Simple sort
+		for i := 0; i < len(keys); i++ {
+			for j := i + 1; j < len(keys); j++ {
+				if keys[j] < keys[i] {
+					keys[i], keys[j] = keys[j], keys[i]
+				}
+			}
+		}
+		for _, key := range keys {
+			chunk := m.chunks[key]
+			fmt.Printf("  %s: %d bytes\n", key, len(chunk.Text))
+		}
+	}
+
 	return nil
 }
 
@@ -76,6 +99,71 @@ func (m *ChunkManager) GetChunk(document, chunkID string) *models.ChunkInfo {
 		return &chunk
 	}
 	return nil
+}
+
+// FindQuoteInAnyChunk searches all chunks for a quote and returns the chunk key if found
+func (m *ChunkManager) FindQuoteInAnyChunk(quote string) string {
+	if quote == "" {
+		return ""
+	}
+	for key, chunk := range m.chunks {
+		if strings.Contains(chunk.Text, quote) {
+			return key
+		}
+	}
+	// Try normalized search
+	normalizedQuote := normalizeWS(quote)
+	for key, chunk := range m.chunks {
+		normalizedText := normalizeWS(chunk.Text)
+		if strings.Contains(normalizedText, normalizedQuote) {
+			return key + " (normalized)"
+		}
+	}
+	return ""
+}
+
+// FindChunkContainingQuote searches all chunks for a quote and returns the chunk
+func (m *ChunkManager) FindChunkContainingQuote(document, quote string) *models.ChunkInfo {
+	if quote == "" {
+		return nil
+	}
+
+	// First try exact match
+	for _, chunk := range m.chunks {
+		if chunk.Document == document && strings.Contains(chunk.Text, quote) {
+			return &chunk
+		}
+	}
+
+	// Try normalized whitespace match
+	normalizedQuote := normalizeWS(quote)
+	for _, chunk := range m.chunks {
+		if chunk.Document == document {
+			normalizedText := normalizeWS(chunk.Text)
+			if strings.Contains(normalizedText, normalizedQuote) {
+				return &chunk
+			}
+		}
+	}
+
+	return nil
+}
+
+func normalizeWS(s string) string {
+	var result strings.Builder
+	inWS := false
+	for _, r := range s {
+		if r == ' ' || r == '\n' || r == '\r' || r == '\t' {
+			if !inWS {
+				result.WriteRune(' ')
+				inWS = true
+			}
+		} else {
+			result.WriteRune(r)
+			inWS = false
+		}
+	}
+	return result.String()
 }
 
 // FindChunkForLocation finds the chunk containing a specific location

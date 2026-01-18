@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -373,9 +374,22 @@ func (h *ProcessingHandler) processDocuments(sessionID string, documents []strin
 				continue
 			}
 
-			// Save facts and chunks
+			// Sort results by ChunkID to ensure consistent ordering
+			// (parallel extraction returns results in arbitrary order)
+			sort.Slice(results, func(i, j int) bool {
+				return results[i].ChunkID < results[j].ChunkID
+			})
+
+			// Assign sequential FactIndex and ChunkID to each fact, then save
 			totalFacts := 0
+			factIndex := 1 // 1-indexed
 			for _, result := range results {
+				// Set FactIndex and ChunkID on each fact before saving
+				for i := range result.Facts {
+					result.Facts[i].FactIndex = factIndex
+					result.Facts[i].ChunkID = result.ChunkID
+					factIndex++
+				}
 				h.store.SaveChunkFacts(sessionID, docName, result.ChunkID, result.Facts)
 				totalFacts += len(result.Facts)
 			}

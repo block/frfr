@@ -315,11 +315,12 @@ func (s *Store) LoadAllFacts(sessionID string) ([]models.ExtractedFact, error) {
 		// Extract chunk ID from filename (e.g., "DocName_chunk_0000.json" -> "chunk_0000")
 		chunkID := extractChunkIDFromFilename(entry.Name())
 
-		// Tag each fact with its chunk ID
+		// Tag each fact with its chunk ID and global index
 		for i := range facts {
 			if facts[i].ChunkID == "" {
 				facts[i].ChunkID = chunkID
 			}
+			facts[i].GlobalIndex = len(allFacts) + i + 1 // 1-indexed
 		}
 
 		allFacts = append(allFacts, facts...)

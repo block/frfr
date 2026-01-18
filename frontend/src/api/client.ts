@@ -188,6 +188,7 @@ class APIClient {
 
         const decoder = new TextDecoder();
         let buffer = '';
+        let eventType = ''; // Track event type across chunks
 
         while (true) {
           const { done, value } = await reader.read();
@@ -199,7 +200,6 @@ class APIClient {
           const lines = buffer.split('\n');
           buffer = lines.pop() || ''; // Keep incomplete line in buffer
 
-          let eventType = '';
           for (const line of lines) {
             if (line.startsWith('event: ')) {
               eventType = line.slice(7);

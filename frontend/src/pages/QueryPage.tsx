@@ -73,18 +73,18 @@ function QueryPage() {
   };
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col" style={{ height: 'calc(100vh - 120px)' }}>
       {/* Header */}
-      <div>
+      <div className="mb-4">
         <Link to={`/sessions/${sessionId}`} className="text-sm text-muted">
           &larr; Back to Session
         </Link>
         <h2 className="card-title mt-1">Query Documents</h2>
       </div>
 
-      <div className="flex gap-4">
-        {/* Query interface */}
-        <div style={{ flex: 1 }}>
+      <div className="flex gap-4" style={{ flex: 1, minHeight: 0 }}>
+        {/* Query interface - scrollable */}
+        <div style={{ flex: 1, overflowY: 'auto', paddingRight: '0.5rem' }}>
           <QueryInterface
             onSubmit={handleQuery}
             loading={loading}
@@ -120,9 +120,16 @@ function QueryPage() {
           )}
         </div>
 
-        {/* Source context panel */}
+        {/* Source context panel - sticky */}
         {currentResponse && selectedSourceIndex !== null && (
-          <div style={{ width: '40%' }}>
+          <div style={{
+            width: '40%',
+            position: 'sticky',
+            top: 0,
+            alignSelf: 'flex-start',
+            maxHeight: '100%',
+            overflowY: 'auto'
+          }}>
             <SourceContextPanel
               source={currentResponse.sources[selectedSourceIndex]}
               onClose={() => setSelectedSourceIndex(null)}
