@@ -1,151 +1,103 @@
 # Quick Start: Process and Query Your Documents
 
-Process PDFs and query them interactively using a single command.
+Process PDFs and query them interactively using the web interface.
 
 ## Prerequisites
 
-- Python 3.10+ installed
-- Claude CLI authenticated: `claude login`
-- Your PDF in a local directory
+- Go 1.21+
+- Node.js 18+
+- Python 3.10+
+- Claude API access (via `ANTHROPIC_API_KEY` or `claude` CLI authentication)
 
-## Fastest Way: Process Command (PDF → Interactive Querying)
-
-Process a PDF from start to finish and enter interactive query mode:
-
-```bash
-# Process a document (extracts, analyzes, validates, and queries)
-frfr process documents/soc2_report.pdf
-
-# Or with custom settings
-frfr process documents/report.pdf \
-  --max-workers 11 \
-  --multipass \
-  --show-facts
-```
-
-This single command:
-1. ✅ Extracts PDF to text
-2. ✅ Extracts facts using LLM
-3. ✅ Validates facts against source
-4. ✅ Launches interactive query mode
-
-Then ask questions like:
-- "Does the system implement 2-factor authentication?"
-- "What are the data retention policies?"
-- "What security controls are described?"
-
-Type `exit` to quit interactive mode.
-
-## Alternative: Step-by-Step Extraction
-
-### Extract a PDF
+## Start the Application
 
 ```bash
-# Extract the PDF to text
-frfr extract documents/report.pdf output/report_text.txt
+# Start the backend and frontend
+./run.sh
+
+# Open in browser
+open http://localhost:3000
 ```
 
-### Extract Facts
+## Process a Document
 
-```bash
-# Extract structured facts from the text
-frfr extract-facts output/report_text.txt \
-  --document-name my_report \
-  --max-workers 11
-```
+1. **Create a session** - Click "New Session" on the home page
+2. **Add a document** - Click "Add Document" and enter the path to your PDF
+   - Supports `~/Downloads/file.pdf` paths
+3. **Start processing** - Click "Process" to begin extraction
+4. **Watch progress** - See real-time chunk progress as facts are extracted
 
-### Validate Facts
+## Query Your Facts
 
-```bash
-# Validate extracted facts against source
-frfr validate-facts output/my_report_facts.json output/report_text.txt
-```
+1. Navigate to your session
+2. Click **Query** in the header
+3. Ask natural language questions:
+   - "Does the system implement 2-factor authentication?"
+   - "What are the data retention policies?"
+   - "What security controls are described?"
+4. View answers with clickable source citations
+5. Click citations to see the source context with highlighted quotes
 
-### Query Interactively
+## Browse Facts
 
-```bash
-# Launch interactive query mode
-frfr interactive output/my_report_facts.json --show-facts
-```
-
-## View the Results
-
-```bash
-# View the extracted text
-cat output/report_text.txt | head -100
-
-# Or with pagination
-less output/report_text.txt
-
-# Search for specific content
-grep -i "authentication" output/report_text.txt
-
-# Count words
-wc -w output/report_text.txt
-```
+1. Navigate to your session
+2. Click **Browse Facts** in the header
+3. Search and filter through extracted facts
+4. Click any fact to see its source context
 
 ## What You Get
 
-✅ **Complete extraction** - All pages processed
-✅ **Clean text** - No OCR artifacts
-✅ **Fast** - PyPDF2 direct extraction (OCR fallback when needed)
-✅ **Encrypted PDFs** - Handles them automatically
-✅ **Validated facts** - 100% verification against source
+- **PDF extraction** - Handles text-based and scanned PDFs
+- **Structured facts** - 8 metadata fields per fact
+- **Source verification** - Every fact linked to source text
+- **Parallel processing** - Fast extraction with progress visualization
+- **Natural language Q&A** - Query your facts conversationally
 
-## Additional CLI Commands
+## Session Structure
 
-### Get PDF info
+Each session stores:
 
-```bash
-frfr info documents/report.pdf
 ```
-
-### CLI help
-
-```bash
-frfr --help
-frfr extract --help
-frfr process --help
+sessions/{session_id}/
+├── metadata.json      # Session metadata & document registry
+├── text/              # Extracted PDF text
+├── chunks/            # Source text chunks (for context panel)
+├── facts/             # Extracted facts per chunk
+└── summaries/         # Document summaries
 ```
-
-## Next Steps
-
-Use the extracted facts for:
-- Natural language Q&A
-- Compliance checking
-- Security analysis
-- Cross-document queries
 
 ## Troubleshooting
 
-**Issue:** `FileNotFoundError: PDF not found`
-**Solution:** Ensure your PDF path is correct
+**Issue:** Document shows "PDF not found"
+**Solution:** Use absolute paths or `~/` for home directory
+
+**Issue:** No API key found
+**Solution:** Set `ANTHROPIC_API_KEY` or run `claude login`
+
+**Issue:** Processing seems stuck
+**Solution:** Check the backend logs in the terminal running `./run.sh`
+
+## API Usage
+
+You can also interact with the API directly:
 
 ```bash
-ls documents/
-# Should show your PDF file
+# List sessions
+curl http://localhost:8080/api/sessions
+
+# Create session
+curl -X POST http://localhost:8080/api/sessions
+
+# Add document
+curl -X POST http://localhost:8080/api/sessions/{id}/documents \
+  -H "Content-Type: application/json" \
+  -d '{"path": "~/Downloads/report.pdf"}'
+
+# Start processing
+curl -X POST http://localhost:8080/api/sessions/{id}/process
+
+# Query facts
+curl -X POST http://localhost:8080/api/sessions/{id}/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What security controls are implemented?"}'
 ```
-
-**Issue:** `No Anthropic API key found`
-**Solution:** Authenticate with Claude CLI:
-
-```bash
-claude login
-```
-
-**Issue:** CLI command not found
-**Solution:** Reinstall the package:
-
-```bash
-pip install -e .
-```
-
-## Architecture
-
-The extraction uses:
-- **PyPDF2** - Fast, clean text extraction for text-based PDFs
-- **pycryptodome** - Handles encrypted PDFs automatically
-- **Tesseract OCR** - Fallback for scanned/image PDFs (rarely needed)
-- **Claude CLI** - LLM-based fact extraction and validation
-
-The CLI intelligently chooses the best method for your PDF.
