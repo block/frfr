@@ -91,6 +91,7 @@ function QueryPage() {
             error={error}
             response={currentResponse}
             onSourceClick={setSelectedSourceIndex}
+            selectedSourceIndex={selectedSourceIndex}
             batchProgress={batchProgress}
             totalFacts={totalFacts}
           />

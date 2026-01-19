@@ -75,9 +75,24 @@ function SourceContextPanel({ source, onClose }: Props) {
 
     if (start < 0 || end < 0 || start >= text.length) {
       return (
-        <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.8125rem' }}>
-          {text}
-        </pre>
+        <>
+          <div
+            style={{
+              padding: '0.5rem 0.75rem',
+              marginBottom: '0.75rem',
+              backgroundColor: '#fef3c7',
+              border: '1px solid #f59e0b',
+              borderRadius: '0.375rem',
+              fontSize: '0.75rem',
+              color: '#92400e',
+            }}
+          >
+            Quote not highlighted. Check the source document near {source.location} — this may be due to table formatting.
+          </div>
+          <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.8125rem' }}>
+            {text}
+          </pre>
+        </>
       );
     }
 
@@ -101,7 +116,22 @@ function SourceContextPanel({ source, onClose }: Props) {
   return (
     <div className="card">
       <div className="flex justify-between items-center mb-4">
-        <h3 className="card-title">Source Context</h3>
+        <h3 className="card-title">
+          Source Context
+          <span
+            style={{
+              marginLeft: '0.5rem',
+              padding: '0.125rem 0.5rem',
+              backgroundColor: 'var(--color-primary)',
+              color: 'white',
+              borderRadius: '0.25rem',
+              fontSize: '0.875rem',
+              fontWeight: 500,
+            }}
+          >
+            Fact #{source.fact_index}
+          </span>
+        </h3>
         <button className="modal-close" onClick={onClose}>
           &times;
         </button>

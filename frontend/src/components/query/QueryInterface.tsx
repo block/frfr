@@ -7,6 +7,7 @@ interface Props {
   error: string | null;
   response: QueryResponse | null;
   onSourceClick: (index: number) => void;
+  selectedSourceIndex: number | null;
   batchProgress: BatchProgress | null;
   totalFacts: number | null;
 }
@@ -16,7 +17,8 @@ interface Props {
 function renderAnswerWithCitations(
   answer: string,
   sources: SourceEvidence[],
-  onSourceClick: (index: number) => void
+  onSourceClick: (index: number) => void,
+  activeFactIndex: number | null
 ): React.ReactNode[] {
   const parts: React.ReactNode[] = [];
   // Match [1], [2], [42, 156], etc.
@@ -46,6 +48,7 @@ function renderAnswerWithCitations(
     const citationLinks = factIndices.map((factIndex, i) => {
       const sourceIndex = factIndexToSourceIndex.get(factIndex);
       const isValid = sourceIndex !== undefined;
+      const isActive = factIndex === activeFactIndex;
 
       return (
         <span key={`${keyIndex}-${i}`}>
@@ -58,12 +61,15 @@ function renderAnswerWithCitations(
                 onSourceClick(sourceIndex);
               }}
               style={{
-                color: 'var(--color-primary)',
+                color: isActive ? 'white' : 'var(--color-primary)',
+                backgroundColor: isActive ? 'var(--color-primary)' : 'transparent',
                 textDecoration: 'none',
                 fontWeight: 500,
+                padding: isActive ? '0 0.25rem' : '0',
+                borderRadius: '0.25rem',
               }}
               onMouseOver={(e) => {
-                e.currentTarget.style.textDecoration = 'underline';
+                if (!isActive) e.currentTarget.style.textDecoration = 'underline';
               }}
               onMouseOut={(e) => {
                 e.currentTarget.style.textDecoration = 'none';
@@ -78,8 +84,19 @@ function renderAnswerWithCitations(
       );
     });
 
+    // Check if any citation in this bracket is active
+    const bracketHasActive = factIndices.includes(activeFactIndex ?? -1);
+
     parts.push(
-      <span key={`citation-${keyIndex}`} style={{ color: 'var(--color-primary)' }}>
+      <span
+        key={`citation-${keyIndex}`}
+        style={{
+          color: bracketHasActive ? 'white' : 'var(--color-primary)',
+          backgroundColor: bracketHasActive ? 'var(--color-primary)' : 'transparent',
+          padding: bracketHasActive ? '0 0.125rem' : '0',
+          borderRadius: '0.25rem',
+        }}
+      >
         [{citationLinks}]
       </span>
     );
@@ -96,13 +113,19 @@ function renderAnswerWithCitations(
   return parts;
 }
 
-function QueryInterface({ onSubmit, loading, error, response, onSourceClick, batchProgress, totalFacts }: Props) {
+function QueryInterface({ onSubmit, loading, error, response, onSourceClick, selectedSourceIndex, batchProgress, totalFacts }: Props) {
   const [query, setQuery] = useState('');
+
+  // Get the fact_index of the currently selected source for highlighting
+  const activeFactIndex = useMemo(() => {
+    if (selectedSourceIndex === null || !response?.sources) return null;
+    return response.sources[selectedSourceIndex]?.fact_index ?? null;
+  }, [selectedSourceIndex, response]);
 
   const renderedAnswer = useMemo(() => {
     if (!response) return null;
-    return renderAnswerWithCitations(response.answer, response.sources ?? [], onSourceClick);
-  }, [response, onSourceClick]);
+    return renderAnswerWithCitations(response.answer, response.sources ?? [], onSourceClick, activeFactIndex);
+  }, [response, onSourceClick, activeFactIndex]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
