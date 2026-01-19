@@ -187,7 +187,9 @@ function SessionPage() {
             sessionId={sessionId!}
             onReprocess={async (docName) => {
               await api.reprocessDocument(sessionId!, docName);
-              loadSession();
+              await loadSession();
+              // Automatically start processing
+              handleStartProcessing();
             }}
           />
         )}
