@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import type { ProcessingEvent } from '../../api/types';
 
 interface Props {
@@ -6,16 +7,62 @@ interface Props {
   onClear: () => void;
 }
 
+interface ChunkProgress {
+  totalChunks: number;
+  completedChunks: Set<string>;
+  runningChunks: Set<string>;
+  factsExtracted: number;
+}
+
 function ProcessingView({ events, isProcessing, onClear }: Props) {
+  // Parse events to extract chunk progress
+  const chunkProgress = useMemo<ChunkProgress>(() => {
+    let totalChunks = 0;
+    const completedChunks = new Set<string>();
+    const runningChunks = new Set<string>();
+    let factsExtracted = 0;
+
+    for (const event of events) {
+      // Parse "Split document into X chunks" message
+      if (event.message) {
+        const splitMatch = event.message.match(/Split document into (\d+) chunks/);
+        if (splitMatch) {
+          totalChunks = parseInt(splitMatch[1], 10);
+        }
+
+        // Parse "Extracted X facts from chunk_XXXX" message
+        const extractMatch = event.message.match(/Extracted (\d+) facts from (chunk_\d+)/);
+        if (extractMatch) {
+          const factCount = parseInt(extractMatch[1], 10);
+          const chunkId = extractMatch[2];
+          completedChunks.add(chunkId);
+          runningChunks.delete(chunkId);
+          factsExtracted += factCount;
+        }
+      }
+
+      // Track chunk_complete events
+      if (event.type === 'chunk_complete' && event.chunk_id) {
+        completedChunks.add(event.chunk_id);
+        runningChunks.delete(event.chunk_id);
+        if (event.data && typeof event.data === 'object' && 'facts_extracted' in event.data) {
+          factsExtracted += (event.data as { facts_extracted: number }).facts_extracted;
+        }
+      }
+    }
+
+    return { totalChunks, completedChunks, runningChunks, factsExtracted };
+  }, [events]);
+
   // Calculate progress from events
   const latestProgress = events
     .filter((e) => e.progress !== undefined)
     .slice(-1)[0]?.progress ?? 0;
 
-  // Count facts extracted
-  const factsExtracted = events
-    .filter((e) => e.type === 'fact_extracted')
-    .reduce((sum, e) => sum + ((e.data as { count?: number })?.count || 0), 0);
+  // Calculate actual progress based on chunks if we have that info
+  const calculatedProgress = chunkProgress.totalChunks > 0
+    ? chunkProgress.completedChunks.size / chunkProgress.totalChunks
+    : latestProgress;
 
   const getLogClass = (type: string) => {
     switch (type) {
@@ -57,12 +104,25 @@ function ProcessingView({ events, isProcessing, onClear }: Props) {
       <div className="mb-4">
         <div className="flex justify-between text-sm mb-1">
           <span>Progress</span>
-          <span>{Math.round(latestProgress * 100)}%</span>
+          <span>{Math.round(calculatedProgress * 100)}%</span>
         </div>
-        <div className="progress-bar">
+        <div
+          style={{
+            height: '8px',
+            backgroundColor: 'var(--color-border)',
+            borderRadius: '4px',
+            overflow: 'hidden',
+          }}
+        >
           <div
-            className="progress-bar-fill"
-            style={{ width: `${latestProgress * 100}%` }}
+            style={{
+              height: '100%',
+              width: `${calculatedProgress * 100}%`,
+              backgroundColor: calculatedProgress >= 1
+                ? 'var(--color-success)'
+                : 'var(--color-primary)',
+              transition: 'width 0.3s ease',
+            }}
           />
         </div>
       </div>
@@ -81,18 +141,97 @@ function ProcessingView({ events, isProcessing, onClear }: Props) {
         </div>
         <div>
           <p className="text-xs text-muted">Facts Extracted</p>
-          <p className="text-sm font-medium">{factsExtracted}</p>
+          <p className="text-sm font-medium">{chunkProgress.factsExtracted}</p>
         </div>
         <div>
-          <p className="text-xs text-muted">Events</p>
-          <p className="text-sm font-medium">{events.length}</p>
+          <p className="text-xs text-muted">Chunks</p>
+          <p className="text-sm font-medium">
+            {chunkProgress.totalChunks > 0
+              ? `${chunkProgress.completedChunks.size}/${chunkProgress.totalChunks}`
+              : '—'}
+          </p>
         </div>
       </div>
+
+      {/* Chunk progress grid */}
+      {chunkProgress.totalChunks > 0 && (
+        <div className="mb-4">
+          <div className="flex gap-4 text-sm mb-2">
+            <div className="flex items-center gap-2">
+              <div
+                style={{
+                  width: '12px',
+                  height: '12px',
+                  borderRadius: '50%',
+                  backgroundColor: 'var(--color-primary)',
+                  animation: isProcessing ? 'pulse 1.5s infinite' : 'none',
+                }}
+              />
+              <span>
+                {chunkProgress.totalChunks - chunkProgress.completedChunks.size} pending
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div
+                style={{
+                  width: '12px',
+                  height: '12px',
+                  borderRadius: '50%',
+                  backgroundColor: 'var(--color-success)',
+                }}
+              />
+              <span>{chunkProgress.completedChunks.size} complete</span>
+            </div>
+          </div>
+
+          {/* Chunk indicators grid */}
+          <div className="flex gap-1 flex-wrap">
+            {Array.from({ length: chunkProgress.totalChunks }).map((_, i) => {
+              const chunkId = `chunk_${String(i).padStart(4, '0')}`;
+              const isComplete = chunkProgress.completedChunks.has(chunkId);
+              const isRunning = chunkProgress.runningChunks.has(chunkId);
+              return (
+                <div
+                  key={i}
+                  title={`Chunk ${i}`}
+                  style={{
+                    width: '24px',
+                    height: '24px',
+                    borderRadius: '4px',
+                    backgroundColor: isComplete
+                      ? 'var(--color-success)'
+                      : isRunning
+                      ? 'var(--color-primary)'
+                      : 'var(--color-border)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '10px',
+                    color: isComplete || isRunning ? 'white' : 'var(--color-muted)',
+                    animation: isRunning ? 'pulse 1.5s infinite' : 'none',
+                  }}
+                >
+                  {i}
+                </div>
+              );
+            })}
+          </div>
+
+          <style>{`
+            @keyframes pulse {
+              0%, 100% { opacity: 1; }
+              50% { opacity: 0.5; }
+            }
+          `}</style>
+        </div>
+      )}
 
       {/* Log output */}
       <div className="log-output">
         {events.length === 0 ? (
-          <p className="text-muted">Waiting for events...</p>
+          <p className="text-muted">
+            {isProcessing ? 'Reconnected to processing stream, waiting for events...' : 'Waiting for events...'}
+          </p>
         ) : (
           events.map((event, i) => (
             <div key={i} className={getLogClass(event.type)}>

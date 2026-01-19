@@ -258,9 +258,7 @@ func (s *Store) UpdateDocumentStatus(sessionID, docName string, status models.Do
 	}
 
 	doc.Status = status
-	if errMsg != "" {
-		doc.ErrorMessage = errMsg
-	}
+	doc.ErrorMessage = errMsg // Always update (clears on success)
 	if status == models.DocumentStatusCompleted {
 		now := models.FlexibleTime{Time: time.Now()}
 		doc.CompletedAt = &now

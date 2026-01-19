@@ -82,6 +82,7 @@ type FactExtractionResult struct {
 	Facts     []ExtractedFact `json:"facts"`
 	LineStart int             `json:"line_start"`
 	LineEnd   int             `json:"line_end"`
+	ChunkText string          `json:"chunk_text,omitempty"` // Original chunk text for source context
 }
 
 // ValidationResult contains the result of validating a fact's evidence

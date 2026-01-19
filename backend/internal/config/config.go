@@ -65,7 +65,7 @@ func DefaultConfig() *Config {
 		MaxRetries:      getEnvInt("FRFR_MAX_RETRIES", 3),
 
 		// Python
-		PythonPath:       getEnv("FRFR_PYTHON_PATH", "python3"),
+		PythonPath:       getEnv("FRFR_PYTHON_PATH", detectPythonPath()),
 		PDFExtractorPath: getEnv("FRFR_PDF_EXTRACTOR", ""),
 	}
 }
@@ -114,4 +114,34 @@ func getEnvFloat(key string, defaultValue float64) float64 {
 // When empty, the Claude client will attempt to use native credentials.
 func getAnthropicAPIKey() string {
 	return os.Getenv("ANTHROPIC_API_KEY")
+}
+
+// detectPythonPath looks for a venv python in common locations
+func detectPythonPath() string {
+	// Get the executable's directory to find the project root
+	execPath, err := os.Executable()
+	if err == nil {
+		// Check for venv relative to executable (backend/frfr-server -> venv/)
+		projectRoot := filepath.Dir(filepath.Dir(execPath))
+		venvPython := filepath.Join(projectRoot, "venv", "bin", "python")
+		if _, err := os.Stat(venvPython); err == nil {
+			return venvPython
+		}
+	}
+
+	// Check working directory
+	if cwd, err := os.Getwd(); err == nil {
+		venvPython := filepath.Join(cwd, "venv", "bin", "python")
+		if _, err := os.Stat(venvPython); err == nil {
+			return venvPython
+		}
+		// Also check parent directory (if running from backend/)
+		venvPython = filepath.Join(filepath.Dir(cwd), "venv", "bin", "python")
+		if _, err := os.Stat(venvPython); err == nil {
+			return venvPython
+		}
+	}
+
+	// Fallback to system python
+	return "python3"
 }

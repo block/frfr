@@ -97,13 +97,16 @@ func (h *DocumentHandler) Add(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Expand tilde in path
+	docPath := expandTilde(req.Path)
+
 	// Use provided name or extract from path
 	docName := req.Name
 	if docName == "" {
 		docName = extractDocumentName(req.Path)
 	}
 
-	if err := h.store.AddDocument(sessionID, docName, req.Path); err != nil {
+	if err := h.store.AddDocument(sessionID, docName, docPath); err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeError(w, http.StatusNotFound, err.Error())
 		} else {

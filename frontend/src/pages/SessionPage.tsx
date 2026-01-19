@@ -22,6 +22,32 @@ function SessionPage() {
     }
   }, [sessionId]);
 
+  // Auto-reconnect to processing events if session is processing
+  useEffect(() => {
+    if (!sessionId || !session) return;
+
+    if (session.status === 'processing' && !processing) {
+      setProcessing(true);
+
+      const cleanup = api.subscribeToProcessingEvents(
+        sessionId,
+        (event) => {
+          setEvents((prev) => [...prev, event]);
+          if (event.type === 'complete') {
+            setProcessing(false);
+            loadSession();
+          }
+        },
+        () => {
+          setProcessing(false);
+          loadSession(); // Reload to get final status
+        }
+      );
+
+      return () => cleanup();
+    }
+  }, [sessionId, session?.status]);
+
   const loadSession = async () => {
     if (!sessionId) return;
     try {

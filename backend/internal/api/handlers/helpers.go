@@ -3,6 +3,9 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 )
 
 // ErrorResponse represents an API error
@@ -26,4 +29,14 @@ func writeError(w http.ResponseWriter, status int, message string) {
 		Error:   http.StatusText(status),
 		Message: message,
 	})
+}
+
+// expandTilde expands ~ to the user's home directory
+func expandTilde(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
 }

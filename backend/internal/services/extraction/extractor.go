@@ -189,6 +189,7 @@ func (e *Extractor) extractFactsFromChunk(
 			Facts:     facts,
 			LineStart: chunk.LineStart,
 			LineEnd:   chunk.LineEnd,
+			ChunkText: chunk.Text,
 		}, nil
 	}
 

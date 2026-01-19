@@ -253,7 +253,10 @@ func (h *ProcessingHandler) processDocuments(sessionID string, documents []strin
 		var textContent string
 		textFile := filepath.Join(sessionDir, "text", docName+".txt")
 
-		if strings.HasSuffix(strings.ToLower(docInfo.OriginalPDFPath), ".pdf") {
+		// Expand tilde in path (for paths like ~/Downloads/file.pdf)
+		pdfPath := expandTilde(docInfo.OriginalPDFPath)
+
+		if strings.HasSuffix(strings.ToLower(pdfPath), ".pdf") {
 			h.broadcast(sessionID, models.ProcessingEvent{
 				Type:      "pdf_extraction_start",
 				Timestamp: time.Now(),
@@ -261,7 +264,7 @@ func (h *ProcessingHandler) processDocuments(sessionID string, documents []strin
 				Message:   "Extracting text from PDF...",
 			})
 
-			result, err := h.pdfExtractor.Extract(ctx, docInfo.OriginalPDFPath, textFile)
+			result, err := h.pdfExtractor.Extract(ctx, pdfPath, textFile)
 			if err != nil {
 				h.store.UpdateDocumentStatus(sessionID, docName, models.DocumentStatusFailed, err.Error())
 				h.broadcast(sessionID, models.ProcessingEvent{
@@ -295,7 +298,7 @@ func (h *ProcessingHandler) processDocuments(sessionID string, documents []strin
 			textContent = string(data)
 		} else {
 			// For non-PDF files, try to read directly
-			data, err := os.ReadFile(docInfo.OriginalPDFPath)
+			data, err := os.ReadFile(pdfPath)
 			if err != nil {
 				h.store.UpdateDocumentStatus(sessionID, docName, models.DocumentStatusFailed, err.Error())
 				h.broadcast(sessionID, models.ProcessingEvent{
@@ -389,6 +392,10 @@ func (h *ProcessingHandler) processDocuments(sessionID string, documents []strin
 					result.Facts[i].FactIndex = factIndex
 					result.Facts[i].ChunkID = result.ChunkID
 					factIndex++
+				}
+				// Save chunk text for source context panel
+				if result.ChunkText != "" {
+					h.store.SaveChunkText(sessionID, docName, result.ChunkID, result.ChunkText)
 				}
 				h.store.SaveChunkFacts(sessionID, docName, result.ChunkID, result.Facts)
 				totalFacts += len(result.Facts)
