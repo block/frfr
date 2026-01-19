@@ -238,6 +238,9 @@ func (h *ProcessingHandler) processDocuments(sessionID string, documents []strin
 			continue
 		}
 
+		// Update document status BEFORE broadcasting so frontend sees correct status
+		h.store.UpdateDocumentStatus(sessionID, docName, models.DocumentStatusProcessing, "")
+
 		h.broadcast(sessionID, models.ProcessingEvent{
 			Type:      models.EventTypeDocStart,
 			Timestamp: time.Now(),
@@ -245,9 +248,6 @@ func (h *ProcessingHandler) processDocuments(sessionID string, documents []strin
 			Message:   fmt.Sprintf("Starting document %d of %d: %s", i+1, totalDocs, docName),
 			Progress:  float64(i) / float64(totalDocs),
 		})
-
-		// Update document status
-		h.store.UpdateDocumentStatus(sessionID, docName, models.DocumentStatusProcessing, "")
 
 		// Step 1: Extract text from PDF (if it's a PDF)
 		var textContent string
@@ -347,6 +347,13 @@ func (h *ProcessingHandler) processDocuments(sessionID string, documents []strin
 			}
 
 			// Extract facts with progress reporting
+			h.broadcast(sessionID, models.ProcessingEvent{
+				Type:      models.EventTypeInfo,
+				Timestamp: time.Now(),
+				Document:  docName,
+				Message:   "Starting fact extraction...",
+			})
+
 			progressChan := make(chan extraction.ExtractionProgress, 100)
 			go func() {
 				for progress := range progressChan {

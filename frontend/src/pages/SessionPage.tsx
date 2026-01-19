@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../api/client';
 import type { Session, DocumentListItem, ProcessingEvent } from '../api/types';
@@ -15,40 +15,9 @@ function SessionPage() {
   const [showAddDoc, setShowAddDoc] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [events, setEvents] = useState<ProcessingEvent[]>([]);
+  const subscriptionRef = useRef<(() => void) | null>(null);
 
-  useEffect(() => {
-    if (sessionId) {
-      loadSession();
-    }
-  }, [sessionId]);
-
-  // Auto-reconnect to processing events if session is processing
-  useEffect(() => {
-    if (!sessionId || !session) return;
-
-    if (session.status === 'processing' && !processing) {
-      setProcessing(true);
-
-      const cleanup = api.subscribeToProcessingEvents(
-        sessionId,
-        (event) => {
-          setEvents((prev) => [...prev, event]);
-          if (event.type === 'complete') {
-            setProcessing(false);
-            loadSession();
-          }
-        },
-        () => {
-          setProcessing(false);
-          loadSession(); // Reload to get final status
-        }
-      );
-
-      return () => cleanup();
-    }
-  }, [sessionId, session?.status]);
-
-  const loadSession = async () => {
+  const loadSession = useCallback(async () => {
     if (!sessionId) return;
     try {
       setLoading(true);
@@ -64,35 +33,99 @@ function SessionPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [sessionId]);
 
-  const handleStartProcessing = async () => {
-    if (!sessionId) return;
-    try {
+  useEffect(() => {
+    if (sessionId) {
+      loadSession();
+    }
+  }, [sessionId, loadSession]);
+
+  // Auto-reconnect to processing events if session is processing
+  useEffect(() => {
+    if (!sessionId || !session) return;
+
+    // Only create subscription if session is processing and we don't have one
+    if (session.status === 'processing' && !subscriptionRef.current) {
       setProcessing(true);
-      setEvents([]);
-      await api.startProcessing(sessionId);
 
-      // Subscribe to events
       const cleanup = api.subscribeToProcessingEvents(
         sessionId,
         (event) => {
           setEvents((prev) => [...prev, event]);
+          if (event.type === 'document_start' || event.type === 'document_complete') {
+            loadSession();
+          }
           if (event.type === 'complete') {
             setProcessing(false);
-            loadSession(); // Reload to get updated stats
+            subscriptionRef.current = null;
+            loadSession();
           }
         },
         () => {
           setProcessing(false);
+          subscriptionRef.current = null;
+          loadSession();
         }
       );
 
-      return () => cleanup();
-    } catch (e) {
-      setProcessing(false);
-      alert(e instanceof Error ? e.message : 'Failed to start processing');
+      subscriptionRef.current = cleanup;
     }
+
+    // Cleanup on unmount
+    return () => {
+      if (subscriptionRef.current) {
+        subscriptionRef.current();
+        subscriptionRef.current = null;
+      }
+    };
+  }, [sessionId, session?.status, loadSession]);
+
+  const handleStartProcessing = async () => {
+    if (!sessionId) return;
+    // Clean up any existing subscription first
+    if (subscriptionRef.current) {
+      subscriptionRef.current();
+      subscriptionRef.current = null;
+    }
+
+    setProcessing(true);
+    setEvents([]);
+
+    // Subscribe to events and wait for connection before starting processing
+    // This ensures we don't miss early events like document_start
+    const cleanup = api.subscribeToProcessingEvents(
+      sessionId,
+      (event) => {
+        setEvents((prev) => [...prev, event]);
+        if (event.type === 'document_start' || event.type === 'document_complete') {
+          loadSession();
+        }
+        if (event.type === 'complete') {
+          setProcessing(false);
+          subscriptionRef.current = null;
+          loadSession();
+        }
+      },
+      () => {
+        setProcessing(false);
+        subscriptionRef.current = null;
+      },
+      // onConnected: start processing only after SSE connection is established
+      async () => {
+        try {
+          await api.startProcessing(sessionId);
+        } catch (e) {
+          // Clean up subscription on error
+          cleanup();
+          subscriptionRef.current = null;
+          setProcessing(false);
+          alert(e instanceof Error ? e.message : 'Failed to start processing');
+        }
+      }
+    );
+
+    subscriptionRef.current = cleanup;
   };
 
   const getStatusBadge = (status: string) => {

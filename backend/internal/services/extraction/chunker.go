@@ -164,10 +164,17 @@ func (c *Chunker) chunkByCharacters(text string, targetChunkChars, overlapChars 
 		})
 
 		chunkID++
+
+		// Break if we've reached the end of the text
+		if chunkEnd >= textLength {
+			break
+		}
+
 		// Move forward with overlap
 		position = chunkEnd - overlapChars
 
-		if position >= textLength {
+		// Safety check: ensure we're making progress
+		if position <= 0 {
 			break
 		}
 	}

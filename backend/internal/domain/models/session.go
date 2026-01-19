@@ -162,4 +162,5 @@ const (
 	EventTypeDocComplete   = "document_complete"
 	EventTypeSummaryStart  = "summary_start"
 	EventTypeSummaryDone   = "summary_complete"
+	EventTypeInfo          = "info"
 )

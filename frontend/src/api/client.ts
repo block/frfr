@@ -271,7 +271,8 @@ class APIClient {
   subscribeToProcessingEvents(
     sessionId: string,
     onEvent: (event: ProcessingEvent) => void,
-    onError?: (error: Event) => void
+    onError?: (error: Event) => void,
+    onConnected?: () => void
   ): () => void {
     const eventSource = new EventSource(
       `${API_BASE}/sessions/${sessionId}/process/events`
@@ -280,6 +281,12 @@ class APIClient {
     eventSource.onmessage = (event) => {
       try {
         const data: ProcessingEvent = JSON.parse(event.data);
+
+        // Notify when connected
+        if (data.type === 'connected' && onConnected) {
+          onConnected();
+        }
+
         onEvent(data);
 
         // Close on completion

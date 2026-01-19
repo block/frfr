@@ -59,14 +59,12 @@ function DocumentsTable({ documents, onReprocess }: Props) {
             </td>
             <td className="text-muted text-sm">{formatDate(doc.added_at)}</td>
             <td>
-              {(doc.status === 'completed' || doc.status === 'failed' || doc.status === 'processing') && (
-                <button
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => onReprocess(doc.name)}
-                >
-                  {doc.status === 'processing' ? 'Restart' : 'Reprocess'}
-                </button>
-              )}
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => onReprocess(doc.name)}
+              >
+                {doc.status === 'pending' ? 'Process' : doc.status === 'processing' ? 'Restart' : 'Reprocess'}
+              </button>
             </td>
           </tr>
         ))}

@@ -29,19 +29,9 @@ function ProcessingView({ events, isProcessing, onClear }: Props) {
         if (splitMatch) {
           totalChunks = parseInt(splitMatch[1], 10);
         }
-
-        // Parse "Extracted X facts from chunk_XXXX" message
-        const extractMatch = event.message.match(/Extracted (\d+) facts from (chunk_\d+)/);
-        if (extractMatch) {
-          const factCount = parseInt(extractMatch[1], 10);
-          const chunkId = extractMatch[2];
-          completedChunks.add(chunkId);
-          runningChunks.delete(chunkId);
-          factsExtracted += factCount;
-        }
       }
 
-      // Track chunk_complete events
+      // Track chunk_complete events (use data.facts_extracted to avoid double counting)
       if (event.type === 'chunk_complete' && event.chunk_id) {
         completedChunks.add(event.chunk_id);
         runningChunks.delete(event.chunk_id);

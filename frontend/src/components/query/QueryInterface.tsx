@@ -94,7 +94,7 @@ function QueryInterface({ onSubmit, loading, error, response, onSourceClick, bat
 
   const renderedAnswer = useMemo(() => {
     if (!response) return null;
-    return renderAnswerWithCitations(response.answer, response.sources.length, onSourceClick);
+    return renderAnswerWithCitations(response.answer, response.sources?.length ?? 0, onSourceClick);
   }, [response, onSourceClick]);
 
   const handleSubmit = (e: React.FormEvent) => {
