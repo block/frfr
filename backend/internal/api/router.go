@@ -36,6 +36,7 @@ func (s *Server) registerRoutes() {
 	factsHandler := handlers.NewFactsHandler(s.sessionStore)
 	processingHandler := handlers.NewProcessingHandler(s.sessionStore, s.config)
 	queryHandler := handlers.NewQueryHandler(s.sessionStore, s.config)
+	filePickerHandler := handlers.NewFilePickerHandler()
 
 	// Sessions
 	s.mux.HandleFunc("GET /api/sessions", sessionHandler.List)
@@ -61,6 +62,9 @@ func (s *Server) registerRoutes() {
 	// Processing
 	s.mux.HandleFunc("POST /api/sessions/{id}/process", processingHandler.Start)
 	s.mux.HandleFunc("GET /api/sessions/{id}/process/events", processingHandler.Events)
+
+	// File picker (macOS native)
+	s.mux.HandleFunc("POST /api/files/pick", filePickerHandler.Pick)
 
 	// Health check
 	s.mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {

@@ -249,6 +249,12 @@ class APIClient {
     );
   }
 
+  // File picker
+  async pickFiles(): Promise<string[]> {
+    const response = await this.request<{ files: string[] }>('POST', '/files/pick');
+    return response.files;
+  }
+
   // Processing
   async startProcessing(
     sessionId: string,
