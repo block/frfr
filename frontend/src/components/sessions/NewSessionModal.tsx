@@ -9,20 +9,35 @@ interface Props {
 
 function NewSessionModal({ onClose, onCreated }: Props) {
   const [name, setName] = useState('');
-  const [documentPaths, setDocumentPaths] = useState('');
+  const [paths, setPaths] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [picking, setPicking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const handlePickFiles = async () => {
+    try {
+      setPicking(true);
+      setError(null);
+      const files = await api.pickFiles();
+      if (files.length > 0) {
+        setPaths(files);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to open file picker');
+    } finally {
+      setPicking(false);
+    }
+  };
+
+  const removePath = (index: number) => {
+    setPaths(paths.filter((_, i) => i !== index));
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       setLoading(true);
       setError(null);
-
-      const paths = documentPaths
-        .split('\n')
-        .map((p) => p.trim())
-        .filter((p) => p);
 
       const session = await api.createSession({
         name: name || undefined,
@@ -60,19 +75,75 @@ function NewSessionModal({ onClose, onCreated }: Props) {
           </div>
 
           <div className="form-group">
-            <label className="form-label">Document Paths (optional)</label>
-            <textarea
-              className="form-input"
-              placeholder="/path/to/document.pdf&#10;/path/to/another.pdf"
-              rows={4}
-              value={documentPaths}
-              onChange={(e) => setDocumentPaths(e.target.value)}
-              style={{ resize: 'vertical' }}
-            />
+            <label className="form-label">Documents (optional)</label>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={handlePickFiles}
+              disabled={picking || loading}
+              style={{ width: '100%' }}
+            >
+              {picking ? 'Opening...' : 'Choose Files...'}
+            </button>
             <p className="text-xs text-muted mt-1">
-              Enter one file path per line. You can also add documents later.
+              You can also add documents after creating the session.
             </p>
           </div>
+
+          {paths.length > 0 && (
+            <div className="form-group">
+              <label className="form-label">Selected Files ({paths.length})</label>
+              <div
+                style={{
+                  maxHeight: '150px',
+                  overflow: 'auto',
+                  border: '1px solid var(--color-border)',
+                  borderRadius: '0.375rem',
+                  padding: '0.5rem',
+                }}
+              >
+                {paths.map((path, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '0.25rem 0',
+                      borderBottom: i < paths.length - 1 ? '1px solid var(--color-border)' : undefined,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: '0.875rem',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        flex: 1,
+                      }}
+                      title={path}
+                    >
+                      {path.split('/').pop()}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removePath(i)}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: 'var(--color-muted)',
+                        cursor: 'pointer',
+                        padding: '0 0.25rem',
+                        fontSize: '1rem',
+                      }}
+                    >
+                      &times;
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {error && (
             <p className="text-sm mb-4" style={{ color: 'var(--color-error)' }}>
