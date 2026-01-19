@@ -54,6 +54,7 @@ type QueryResult struct {
 
 // SourceResult contains evidence for a query answer
 type SourceResult struct {
+	FactIndex  int     `json:"fact_index"` // Canonical fact number for citation linking
 	Claim      string  `json:"claim"`
 	Quote      string  `json:"quote"`
 	Document   string  `json:"document"`
@@ -239,9 +240,10 @@ func (p *Processor) evaluateFactBatch(ctx context.Context, query string, startId
 	sb.WriteString("- Questions about 'data protection' relate to: classification, encryption, privacy, handling procedures\n\n")
 	sb.WriteString("Facts:\n")
 
-	// Number facts with their global index (1-indexed for display)
+	// Number facts locally within batch (1-indexed for Claude)
 	for i := startIdx; i < endIdx; i++ {
-		sb.WriteString(fmt.Sprintf("[%d] %s\n", i+1, p.facts[i].Claim))
+		localIdx := i - startIdx + 1 // 1, 2, 3, ...
+		sb.WriteString(fmt.Sprintf("[%d] %s\n", localIdx, p.facts[i].Claim))
 	}
 
 	sb.WriteString("\nReturn the numbers of ALL facts that could help answer the question, even if only partially relevant.\n")
@@ -268,15 +270,15 @@ func (p *Processor) evaluateFactBatch(ctx context.Context, query string, startId
 
 	var indices []int
 	for _, numStr := range numStrs {
-		idx, err := strconv.Atoi(numStr)
+		localIdx, err := strconv.Atoi(numStr)
 		if err != nil {
 			continue
 		}
-		// Convert 1-indexed to 0-indexed
-		idx--
-		// Validate it's within this batch's range (mapped to global index)
-		if idx >= startIdx && idx < endIdx {
-			indices = append(indices, idx)
+		// Convert 1-indexed local to 0-indexed global
+		globalIdx := startIdx + localIdx - 1
+		// Validate it's within this batch's range
+		if globalIdx >= startIdx && globalIdx < endIdx {
+			indices = append(indices, globalIdx)
 		}
 	}
 
@@ -441,6 +443,7 @@ func (p *Processor) buildSources(facts []models.ExtractedFact) []SourceResult {
 
 	for _, fact := range facts {
 		source := SourceResult{
+			FactIndex:  fact.FactIndex,
 			Claim:      fact.Claim,
 			Quote:      fact.GetPrimaryQuote(),
 			Document:   fact.SourceDoc,
@@ -453,6 +456,7 @@ func (p *Processor) buildSources(facts []models.ExtractedFact) []SourceResult {
 		if p.chunkManager != nil {
 			quote := fact.GetPrimaryQuote()
 			foundChunk := ""
+			usedFallback := false
 			if quote != "" {
 				// Search all chunks for this quote
 				chunk := p.chunkManager.FindChunkContainingQuote(fact.SourceDoc, quote)
@@ -467,7 +471,8 @@ func (p *Processor) buildSources(facts []models.ExtractedFact) []SourceResult {
 				chunk := p.chunkManager.GetChunk(fact.SourceDoc, fact.ChunkID)
 				if chunk != nil {
 					source.ChunkText = chunk.Text
-					foundChunk = fact.ChunkID + " (fallback)"
+					foundChunk = fact.ChunkID
+					usedFallback = true
 				}
 			}
 
@@ -481,7 +486,8 @@ func (p *Processor) buildSources(facts []models.ExtractedFact) []SourceResult {
 			if source.ChunkText == "" {
 				fmt.Printf("[DEBUG] Fact#%d (ChunkID=%s, Loc=%s): NO CHUNK FOUND, quote=%q\n",
 					fact.FactIndex, fact.ChunkID, fact.SourceLocation, truncateString(quote, 40))
-			} else if foundChunk != fact.ChunkID {
+			} else if foundChunk != fact.ChunkID && !usedFallback {
+				// Only log mismatch if quote was found in a different chunk (not via fallback)
 				fmt.Printf("[DEBUG] Fact#%d: ChunkID mismatch - stored as %s but quote found in %s\n",
 					fact.FactIndex, fact.ChunkID, foundChunk)
 			}
@@ -499,14 +505,14 @@ func (p *Processor) generateAnswer(ctx context.Context, query string, facts []mo
 		return "", fmt.Errorf("no Claude client available")
 	}
 
-	// Build prompt
+	// Build prompt - use canonical FactIndex for citations so they match the browsable fact list
 	var sb strings.Builder
 	sb.WriteString("Based on the following extracted facts from official documents, answer this question:\n\n")
 	sb.WriteString(fmt.Sprintf("Question: %s\n\n", query))
 	sb.WriteString("Available Facts:\n")
 
-	for i, fact := range facts {
-		sb.WriteString(fmt.Sprintf("[%d] %s\n", i+1, fact.Claim))
+	for _, fact := range facts {
+		sb.WriteString(fmt.Sprintf("[%d] %s\n", fact.FactIndex, fact.Claim))
 		if fact.GetPrimaryQuote() != "" {
 			sb.WriteString(fmt.Sprintf("    Evidence: \"%s\"\n", fact.GetPrimaryQuote()))
 		}
@@ -515,10 +521,10 @@ func (p *Processor) generateAnswer(ctx context.Context, query string, facts []mo
 
 	sb.WriteString("\nInstructions:\n")
 	sb.WriteString("1. Answer the question using ONLY the facts provided above.\n")
-	sb.WriteString("2. IMPORTANT: Cite your sources using [1], [2], etc. for each claim you make.\n")
+	sb.WriteString("2. IMPORTANT: Cite your sources using the fact numbers shown (e.g., [42], [156]).\n")
 	sb.WriteString("3. Only cite facts that directly support your statements.\n")
 	sb.WriteString("4. If the facts don't fully answer the question, say what's missing.\n")
-	sb.WriteString("\nExample format: \"The system uses encryption [1] and requires authentication [3].\"\n")
+	sb.WriteString("\nExample format: \"The system uses encryption [42] and requires authentication [156].\"\n")
 
 	response, err := p.client.Prompt(ctx, sb.String(), &claude.PromptOptions{
 		MaxTokens: 2000,

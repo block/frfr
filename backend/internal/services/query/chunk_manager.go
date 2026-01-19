@@ -2,7 +2,6 @@ package query
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -67,28 +66,6 @@ func (m *ChunkManager) LoadChunks() error {
 		}
 	}
 
-	// Debug: show loaded chunk keys and sizes
-	if len(m.chunks) > 0 {
-		fmt.Printf("[DEBUG] ChunkManager loaded %d chunks:\n", len(m.chunks))
-		// Sort keys to see them in order
-		var keys []string
-		for key := range m.chunks {
-			keys = append(keys, key)
-		}
-		// Simple sort
-		for i := 0; i < len(keys); i++ {
-			for j := i + 1; j < len(keys); j++ {
-				if keys[j] < keys[i] {
-					keys[i], keys[j] = keys[j], keys[i]
-				}
-			}
-		}
-		for _, key := range keys {
-			chunk := m.chunks[key]
-			fmt.Printf("  %s: %d bytes\n", key, len(chunk.Text))
-		}
-	}
-
 	return nil
 }
 
@@ -146,7 +123,86 @@ func (m *ChunkManager) FindChunkContainingQuote(document, quote string) *models.
 		}
 	}
 
+	// Try matching key phrases from the quote (handles interleaved PDF table text)
+	// Extract distinctive phrases (skip common words at start)
+	if len(quote) > 30 {
+		phrases := extractDistinctivePhrases(quote)
+		for _, phrase := range phrases {
+			if len(phrase) < 15 {
+				continue // Skip short phrases
+			}
+			for _, chunk := range m.chunks {
+				if chunk.Document == document {
+					// Try both exact and normalized
+					if strings.Contains(chunk.Text, phrase) || strings.Contains(normalizeWS(chunk.Text), normalizeWS(phrase)) {
+						return &chunk
+					}
+				}
+			}
+		}
+	}
+
 	return nil
+}
+
+// extractDistinctivePhrases extracts meaningful phrases from a quote
+// Skips common prefixes like "The company" and looks for specific content
+func extractDistinctivePhrases(quote string) []string {
+	var phrases []string
+
+	// Common SOC2 prefixes to skip
+	skipPrefixes := []string{
+		"The company ",
+		"the company ",
+		"Inspected the ",
+		"inspected the ",
+	}
+
+	working := quote
+	for _, prefix := range skipPrefixes {
+		if strings.HasPrefix(working, prefix) {
+			working = working[len(prefix):]
+			break
+		}
+	}
+
+	// Take first substantial portion after skipping prefix
+	if len(working) > 20 {
+		// Find a good break point (after 20+ chars, at a space)
+		breakPoint := 40
+		if breakPoint > len(working) {
+			breakPoint = len(working)
+		}
+		for i := breakPoint; i > 20; i-- {
+			if working[i-1] == ' ' {
+				breakPoint = i - 1
+				break
+			}
+		}
+		phrases = append(phrases, working[:breakPoint])
+	}
+
+	// Also try middle portion of the original quote
+	if len(quote) > 60 {
+		mid := len(quote) / 3
+		end := mid + 30
+		if end > len(quote) {
+			end = len(quote)
+		}
+		// Find word boundaries
+		for mid > 0 && quote[mid] != ' ' {
+			mid++
+		}
+		mid++ // skip space
+		for end < len(quote) && quote[end] != ' ' {
+			end++
+		}
+		if end > mid+15 {
+			phrases = append(phrases, quote[mid:end])
+		}
+	}
+
+	return phrases
 }
 
 func normalizeWS(s string) string {

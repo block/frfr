@@ -54,6 +54,7 @@ type QueryResponse struct {
 
 // SourceEvidence contains evidence for a query answer
 type SourceEvidence struct {
+	FactIndex  int     `json:"fact_index"` // Canonical fact number for citation linking
 	Claim      string  `json:"claim"`
 	Quote      string  `json:"quote"`
 	Document   string  `json:"document"`
@@ -125,6 +126,7 @@ func (h *QueryHandler) Submit(w http.ResponseWriter, r *http.Request) {
 	var sources []SourceEvidence
 	for _, src := range result.Sources {
 		source := SourceEvidence{
+			FactIndex:  src.FactIndex,
 			Claim:      src.Claim,
 			Quote:      src.Quote,
 			Document:   src.Document,
@@ -305,6 +307,7 @@ func (h *QueryHandler) SubmitStream(w http.ResponseWriter, r *http.Request) {
 	var sources []SourceEvidence
 	for _, src := range result.Sources {
 		source := SourceEvidence{
+			FactIndex:  src.FactIndex,
 			Claim:      src.Claim,
 			Quote:      src.Quote,
 			Document:   src.Document,
@@ -320,6 +323,12 @@ func (h *QueryHandler) SubmitStream(w http.ResponseWriter, r *http.Request) {
 
 			if idx < 0 {
 				idx, quoteLen = findQuoteWithNormalizedWhitespace(source.ChunkText, source.Quote)
+			}
+
+			// If still not found, try matching a key phrase from the quote
+			// (handles interleaved PDF table text where full quotes are broken up)
+			if idx < 0 {
+				idx, quoteLen = findKeyPhraseMatch(source.ChunkText, source.Quote)
 			}
 
 			if idx >= 0 {
@@ -354,15 +363,13 @@ func (h *QueryHandler) SubmitStream(w http.ResponseWriter, r *http.Request) {
 				runeEnd := runeStart + len([]rune(source.ChunkText[newIdx:newIdx+quoteLen]))
 				source.Highlights = []int{runeStart, runeEnd}
 			} else {
-				// Debug: quote not found - show assigned chunk info
-				log.Printf("[DEBUG] Source %d: quote not found. Doc=%s Loc=%s ChunkText len=%d",
-					len(sources)+1, source.Document, source.Location, len(source.ChunkText))
-				log.Printf("  Quote (first 80): %q", truncateStr(source.Quote, 80))
-				log.Printf("  ChunkText (first 80): %q", truncateStr(source.ChunkText, 80))
-
-				if len(source.ChunkText) > 500 {
-					source.ChunkText = source.ChunkText[:500] + "..."
+				// Quote not found - show chunk text without highlighting
+				// Still useful as it's from the correct document section
+				if len(source.ChunkText) > 800 {
+					source.ChunkText = source.ChunkText[:800] + "..."
 				}
+				// Set empty highlights to indicate source is valid but couldn't highlight
+				source.Highlights = []int{}
 			}
 		} else if source.ChunkText == "" {
 			log.Printf("[DEBUG] Source %d: no chunk text available", len(sources)+1)
@@ -496,4 +503,112 @@ func normalizeWhitespace(s string) string {
 		}
 	}
 	return strings.TrimSpace(result.String())
+}
+
+// findKeyPhraseMatch tries to find the longest matching portion of the quote in the text.
+// This handles cases where quotes have minor word differences from the source.
+// Returns byte index and length of matched phrase, or (-1, 0) if not found.
+func findKeyPhraseMatch(text, quote string) (int, int) {
+	if len(quote) < 20 {
+		return -1, 0
+	}
+
+	normalizedText := normalizeWhitespace(text)
+	normalizedQuote := normalizeWhitespace(quote)
+
+	// Try to find the longest matching substring from the start of the quote
+	// This handles cases where only the end differs (e.g., "were" vs "is")
+	bestIdx := -1
+	bestLen := 0
+
+	// Try progressively shorter prefixes of the quote
+	for tryLen := len(normalizedQuote); tryLen >= 30; tryLen -= 10 {
+		prefix := normalizedQuote[:tryLen]
+		idx := strings.Index(normalizedText, prefix)
+		if idx >= 0 {
+			bestIdx = idx
+			bestLen = tryLen
+			break
+		}
+	}
+
+	// Also try from a distinctive middle part (skip common prefixes)
+	if bestLen < 50 {
+		startOffset := 0
+		skipPrefixes := []string{"Inspected the ", "The company ", "the company "}
+		for _, p := range skipPrefixes {
+			if strings.HasPrefix(normalizedQuote, p) {
+				startOffset = len(p)
+				break
+			}
+		}
+
+		if startOffset > 0 && len(normalizedQuote) > startOffset+30 {
+			// Try matching from after the common prefix
+			for tryLen := len(normalizedQuote) - startOffset; tryLen >= 30; tryLen -= 10 {
+				phrase := normalizedQuote[startOffset : startOffset+tryLen]
+				idx := strings.Index(normalizedText, phrase)
+				if idx >= 0 && tryLen > bestLen {
+					bestIdx = idx
+					bestLen = tryLen
+					break
+				}
+			}
+		}
+	}
+
+	if bestIdx < 0 || bestLen < 30 {
+		return -1, 0
+	}
+
+	// Map the normalized position back to original text position
+	// Find where in the original text this normalized position corresponds to
+	origIdx, origLen := mapNormalizedToOriginal(text, normalizedText, bestIdx, bestLen)
+	return origIdx, origLen
+}
+
+// mapNormalizedToOriginal maps a position in normalized text back to the original text
+func mapNormalizedToOriginal(original, normalized string, normIdx, normLen int) (int, int) {
+	// Build position mapping from original to normalized
+	origPos := 0
+	normPos := 0
+	inWhitespace := false
+
+	startOrigPos := -1
+	endOrigPos := -1
+
+	for origPos < len(original) && normPos <= normIdx+normLen {
+		r := rune(original[origPos])
+
+		if r == ' ' || r == '\n' || r == '\r' || r == '\t' {
+			if !inWhitespace {
+				if normPos == normIdx {
+					startOrigPos = origPos
+				}
+				normPos++
+				inWhitespace = true
+			}
+		} else {
+			if normPos == normIdx && startOrigPos < 0 {
+				startOrigPos = origPos
+			}
+			normPos++
+			inWhitespace = false
+		}
+
+		if normPos == normIdx+normLen && endOrigPos < 0 {
+			endOrigPos = origPos + 1
+		}
+
+		origPos++
+	}
+
+	if startOrigPos < 0 {
+		return -1, 0
+	}
+	if endOrigPos < 0 {
+		endOrigPos = len(original)
+	}
+
+	return startOrigPos, endOrigPos - startOrigPos
 }

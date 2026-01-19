@@ -132,6 +132,7 @@ export interface QueryStreamCallbacks {
 }
 
 export interface SourceEvidence {
+  fact_index: number;  // Canonical fact number for citation linking
   claim: string;
   quote: string;
   document: string;

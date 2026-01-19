@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import type { QueryResponse, BatchProgress } from '../../api/types';
+import type { QueryResponse, BatchProgress, SourceEvidence } from '../../api/types';
 
 interface Props {
   onSubmit: (query: string) => void;
@@ -12,14 +12,21 @@ interface Props {
 }
 
 // Parse answer text and make citation references clickable
+// Citations now use canonical fact_index numbers (e.g., [42], [156])
 function renderAnswerWithCitations(
   answer: string,
-  sourceCount: number,
+  sources: SourceEvidence[],
   onSourceClick: (index: number) => void
 ): React.ReactNode[] {
   const parts: React.ReactNode[] = [];
-  // Match [1], [2], [1, 2], [1, 2, 3], etc.
+  // Match [1], [2], [42, 156], etc.
   const citationRegex = /\[(\d+(?:\s*,\s*\d+)*)\]/g;
+
+  // Build a map from fact_index to source array index for quick lookup
+  const factIndexToSourceIndex = new Map<number, number>();
+  sources.forEach((source, idx) => {
+    factIndexToSourceIndex.set(source.fact_index, idx);
+  });
 
   let lastIndex = 0;
   let match;
@@ -31,14 +38,14 @@ function renderAnswerWithCitations(
       parts.push(answer.slice(lastIndex, match.index));
     }
 
-    // Parse the numbers inside the brackets
+    // Parse the numbers inside the brackets (these are fact_index values)
     const numbersStr = match[1];
-    const numbers = numbersStr.split(/\s*,\s*/).map(n => parseInt(n, 10));
+    const factIndices = numbersStr.split(/\s*,\s*/).map(n => parseInt(n, 10));
 
     // Create clickable citation links
-    const citationLinks = numbers.map((num, i) => {
-      const sourceIndex = num - 1; // Convert 1-indexed to 0-indexed
-      const isValid = sourceIndex >= 0 && sourceIndex < sourceCount;
+    const citationLinks = factIndices.map((factIndex, i) => {
+      const sourceIndex = factIndexToSourceIndex.get(factIndex);
+      const isValid = sourceIndex !== undefined;
 
       return (
         <span key={`${keyIndex}-${i}`}>
@@ -62,10 +69,10 @@ function renderAnswerWithCitations(
                 e.currentTarget.style.textDecoration = 'none';
               }}
             >
-              {num}
+              {factIndex}
             </a>
           ) : (
-            <span>{num}</span>
+            <span>{factIndex}</span>
           )}
         </span>
       );
@@ -94,7 +101,7 @@ function QueryInterface({ onSubmit, loading, error, response, onSourceClick, bat
 
   const renderedAnswer = useMemo(() => {
     if (!response) return null;
-    return renderAnswerWithCitations(response.answer, response.sources?.length ?? 0, onSourceClick);
+    return renderAnswerWithCitations(response.answer, response.sources ?? [], onSourceClick);
   }, [response, onSourceClick]);
 
   const handleSubmit = (e: React.FormEvent) => {
