@@ -52,7 +52,7 @@ function renderAnswerWithCitations(
 
       return (
         <span key={`${keyIndex}-${i}`}>
-          {i > 0 && ', '}
+          {i > 0 && <span style={{ color: 'var(--color-primary)' }}>, </span>}
           {isValid ? (
             <a
               href="#"
@@ -65,7 +65,7 @@ function renderAnswerWithCitations(
                 backgroundColor: isActive ? 'var(--color-primary)' : 'transparent',
                 textDecoration: 'none',
                 fontWeight: 500,
-                padding: isActive ? '0 0.25rem' : '0',
+                padding: isActive ? '0.125rem 0.25rem' : '0',
                 borderRadius: '0.25rem',
               }}
               onMouseOver={(e) => {
@@ -78,25 +78,14 @@ function renderAnswerWithCitations(
               {factIndex}
             </a>
           ) : (
-            <span>{factIndex}</span>
+            <span style={{ color: 'var(--color-primary)' }}>{factIndex}</span>
           )}
         </span>
       );
     });
 
-    // Check if any citation in this bracket is active
-    const bracketHasActive = factIndices.includes(activeFactIndex ?? -1);
-
     parts.push(
-      <span
-        key={`citation-${keyIndex}`}
-        style={{
-          color: bracketHasActive ? 'white' : 'var(--color-primary)',
-          backgroundColor: bracketHasActive ? 'var(--color-primary)' : 'transparent',
-          padding: bracketHasActive ? '0 0.125rem' : '0',
-          borderRadius: '0.25rem',
-        }}
-      >
+      <span key={`citation-${keyIndex}`} style={{ color: 'var(--color-primary)' }}>
         [{citationLinks}]
       </span>
     );
