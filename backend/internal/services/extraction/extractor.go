@@ -453,7 +453,7 @@ func parseFactsResponse(response, documentName string, chunk models.ChunkInfo) (
 	return facts, nil
 }
 
-// cleanJSONResponse removes markdown code blocks and extra whitespace
+// cleanJSONResponse removes markdown code blocks and extracts JSON from prose
 func cleanJSONResponse(response string) string {
 	// Remove markdown code blocks
 	re := regexp.MustCompile("```(?:json)?\\s*")
@@ -462,6 +462,47 @@ func cleanJSONResponse(response string) string {
 
 	// Trim whitespace
 	response = strings.TrimSpace(response)
+
+	// If response doesn't start with { or [, try to find JSON in the response
+	if len(response) > 0 && response[0] != '{' && response[0] != '[' {
+		// Find first { or [ which likely starts the JSON
+		objStart := strings.Index(response, "{")
+		arrStart := strings.Index(response, "[")
+
+		start := -1
+		isObject := false
+		if objStart >= 0 && (arrStart < 0 || objStart < arrStart) {
+			start = objStart
+			isObject = true
+		} else if arrStart >= 0 {
+			start = arrStart
+			isObject = false
+		}
+
+		if start >= 0 {
+			// Find the matching closing bracket
+			response = response[start:]
+			depth := 0
+			openChar := byte('{')
+			closeChar := byte('}')
+			if !isObject {
+				openChar = '['
+				closeChar = ']'
+			}
+
+			for i := 0; i < len(response); i++ {
+				if response[i] == openChar {
+					depth++
+				} else if response[i] == closeChar {
+					depth--
+					if depth == 0 {
+						response = response[:i+1]
+						break
+					}
+				}
+			}
+		}
+	}
 
 	return response
 }
