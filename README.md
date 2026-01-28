@@ -37,23 +37,17 @@ Frfr uses a Go backend with a React frontend:
 ┌─────────────────────────────────────────┐
 │         Go Backend Server               │
 │  - Session & document management        │
+│  - PDF text extraction (pdfium/wasm)    │
 │  - Claude API integration               │
 │  - Parallel fact extraction             │
 │  - Query processing with citations      │
-└────────────────┬────────────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────────────┐
-│      Python PDF Extractor               │
-│  - pdfplumber / PyMuPDF extraction      │
-│  - Handles text & scanned PDFs          │
 └─────────────────────────────────────────┘
 ```
 
 ## Features
 
 ### Document Processing
-- PDF text extraction (pdfplumber with PyMuPDF fallback)
+- PDF text extraction via go-pdfium (WebAssembly, no external dependencies)
 - Adaptive chunking with semantic boundaries
 - Parallel fact extraction (up to 20 concurrent workers)
 - Real-time progress visualization with chunk grid
@@ -85,7 +79,7 @@ frfr/
 │       └── services/          # Business logic
 │           ├── claude/        # Claude API client
 │           ├── extraction/    # Fact extraction
-│           ├── pdf/           # PDF extraction (calls Python)
+│           ├── pdf/           # PDF extraction (pdfium)
 │           ├── query/         # Query processing
 │           ├── session/       # Session management
 │           └── validation/    # Fact validation
@@ -94,8 +88,6 @@ frfr/
 │       ├── api/               # API client
 │       ├── components/        # React components
 │       └── pages/             # Page components
-├── python/                     # Python PDF extractor module
-│   └── frfr_pdf/
 ├── run.sh                      # Start script
 └── docs/                       # Documentation
 ```
@@ -104,7 +96,6 @@ frfr/
 
 - Go 1.21+
 - Node.js 18+
-- Python 3.10+
 - Claude API access (via `ANTHROPIC_API_KEY` or `claude` CLI authentication)
 
 ## Installation
@@ -119,11 +110,10 @@ cd frfr
 ```
 
 The `run.sh` script will:
-1. Check dependencies (Go, Node, Python)
-2. Install the Python PDF extractor
-3. Install frontend dependencies
-4. Build and start the Go backend
-5. Start the frontend dev server
+1. Check dependencies (Go, Node)
+2. Install frontend dependencies
+3. Build and start the Go backend
+4. Start the frontend dev server
 
 ## Configuration
 
@@ -135,7 +125,6 @@ Environment variables:
 | `FRFR_DATA_DIR` | `~/Documents/frfr/sessions` | Session storage directory |
 | `FRFR_MAX_WORKERS` | `20` | Max parallel extraction workers |
 | `ANTHROPIC_API_KEY` | - | Claude API key (optional if using CLI auth) |
-| `FRFR_PYTHON_PATH` | auto-detect | Python interpreter path |
 
 ## Session Structure
 
