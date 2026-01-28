@@ -12,17 +12,28 @@ interface ChunkProgress {
   completedChunks: Set<string>;
   runningChunks: Set<string>;
   factsExtracted: number;
+  currentDocument: string | null;
 }
 
 function ProcessingView({ events, isProcessing, onClear }: Props) {
-  // Parse events to extract chunk progress
+  // Parse events to extract chunk progress for the current document
   const chunkProgress = useMemo<ChunkProgress>(() => {
     let totalChunks = 0;
-    const completedChunks = new Set<string>();
-    const runningChunks = new Set<string>();
+    let completedChunks = new Set<string>();
+    let runningChunks = new Set<string>();
     let factsExtracted = 0;
+    let currentDocument: string | null = null;
 
     for (const event of events) {
+      // When a new document starts, reset progress tracking
+      if (event.type === 'document_start' && event.document) {
+        currentDocument = event.document;
+        totalChunks = 0;
+        completedChunks = new Set<string>();
+        runningChunks = new Set<string>();
+        factsExtracted = 0;
+      }
+
       // Parse "Split document into X chunks" message
       if (event.message) {
         const splitMatch = event.message.match(/Split document into (\d+) chunks/);
@@ -39,9 +50,14 @@ function ProcessingView({ events, isProcessing, onClear }: Props) {
           factsExtracted += (event.data as { facts_extracted: number }).facts_extracted;
         }
       }
+
+      // Track document completion
+      if (event.type === 'document_complete' && event.document === currentDocument) {
+        // Mark as complete - don't reset yet, keep showing until next doc starts
+      }
     }
 
-    return { totalChunks, completedChunks, runningChunks, factsExtracted };
+    return { totalChunks, completedChunks, runningChunks, factsExtracted, currentDocument };
   }, [events]);
 
   // Calculate progress from events
@@ -81,7 +97,18 @@ function ProcessingView({ events, isProcessing, onClear }: Props) {
     <div className="card">
       <div className="card-header">
         <h3 className="card-title">
-          {isProcessing ? 'Processing...' : 'Processing Complete'}
+          {isProcessing ? (
+            <>
+              Processing
+              {chunkProgress.currentDocument && (
+                <span style={{ fontWeight: 'normal', marginLeft: '8px' }}>
+                  — {chunkProgress.currentDocument}
+                </span>
+              )}
+            </>
+          ) : (
+            'Processing Complete'
+          )}
         </h3>
         {!isProcessing && events.length > 0 && (
           <button className="btn btn-secondary btn-sm" onClick={onClear}>
