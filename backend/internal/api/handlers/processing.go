@@ -34,7 +34,7 @@ func NewProcessingHandler(store *session.Store, cfg *config.Config) *ProcessingH
 	return &ProcessingHandler{
 		store:        store,
 		config:       cfg,
-		pdfExtractor: pdf.NewExtractor(cfg.PythonPath),
+		pdfExtractor: pdf.NewExtractor(""),
 		subscribers:  make(map[string][]chan models.ProcessingEvent),
 	}
 }

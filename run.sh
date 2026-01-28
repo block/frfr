@@ -57,12 +57,6 @@ if ! command -v go &> /dev/null; then
 fi
 echo -e "  ${GREEN}✓${NC} Go $(go version | awk '{print $3}')"
 
-if ! command -v python3 &> /dev/null; then
-    echo -e "${RED}Error: Python 3 is not installed${NC}"
-    exit 1
-fi
-echo -e "  ${GREEN}✓${NC} Python $(python3 --version | awk '{print $2}')"
-
 if ! command -v node &> /dev/null; then
     echo -e "${RED}Error: Node.js is not installed${NC}"
     exit 1
@@ -81,15 +75,6 @@ else
         echo -e "    Or set: ${BLUE}export ANTHROPIC_API_KEY=your_key${NC}"
     fi
 fi
-
-# Install Python PDF extractor
-echo -e "\n${YELLOW}Setting up Python PDF extractor...${NC}"
-cd "$SCRIPT_DIR/python"
-if ! python3 -c "import frfr_pdf" 2>/dev/null; then
-    echo -e "  Installing frfr-pdf package..."
-    pip install -e . -q
-fi
-echo -e "  ${GREEN}✓${NC} frfr-pdf installed"
 
 # Install frontend dependencies if needed
 if [ "$NO_FRONTEND" = false ]; then
