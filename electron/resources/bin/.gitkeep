@@ -1,0 +1,3 @@
+# This directory contains platform-specific binaries at build time
+# arm64/frfr-server - macOS ARM64 binary
+# x64/frfr-server - macOS x64 binary
