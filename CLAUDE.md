@@ -6,14 +6,19 @@ High-confidence document Q&A using LLM fact extraction with source verification.
 
 - **Backend**: Go (REST API + SSE)
 - **Frontend**: React + TypeScript + Vite
+- **Desktop**: Electron (macOS)
 - **PDF extraction**: go-pdfium (WebAssembly, no Python)
 - **LLM**: Claude API
 
 ## Quick Start
 
 ```bash
-./run.sh              # Start backend + frontend
+./run.sh              # Start backend + frontend (web)
 open http://localhost:3000
+
+# Or build desktop app
+./scripts/build-electron.sh --arch arm64
+open electron/release/mac-arm64/frfr.app
 ```
 
 ## Structure
@@ -30,6 +35,12 @@ backend/
       claude/         # Claude API client
 frontend/
   src/components/     # React components
+electron/
+  main/               # Main process (backend lifecycle, IPC)
+  preload/            # Secure IPC bridge
+scripts/
+  dev-electron.sh     # Electron dev mode
+  build-electron.sh   # Electron production build
 docs/                 # Design docs
 ```
 

@@ -1,0 +1,47 @@
+appId: com.frfr.app
+productName: frfr
+copyright: Copyright © 2024 frfr
+
+directories:
+  output: release
+  buildResources: resources
+
+files:
+  - dist/**/*
+  - resources/**/*
+  - "!resources/bin/**/*"
+
+extraResources:
+  - from: resources/bin/${arch}
+    to: bin
+    filter:
+      - "**/*"
+  - from: ../frontend/dist
+    to: frontend
+
+mac:
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+    - target: zip
+      arch:
+        - arm64
+        - x64
+  category: public.app-category.productivity
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: resources/entitlements.mac.plist
+  entitlementsInherit: resources/entitlements.mac.plist
+
+dmg:
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+# No Windows/Linux for now - macOS only

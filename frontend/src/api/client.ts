@@ -14,8 +14,23 @@ import type {
   BatchProgress,
   QueryStreamCallbacks,
 } from './types';
+import '../types/electron.d.ts';
 
-const API_BASE = '/api';
+// Determine API base URL
+// In Electron: get port from URL query param (set by main process)
+// In browser: use relative path (proxied by Vite)
+function getApiBase(): string {
+  if (typeof window !== 'undefined') {
+    const params = new URLSearchParams(window.location.search);
+    const backendPort = params.get('backendPort');
+    if (backendPort) {
+      return `http://127.0.0.1:${backendPort}/api`;
+    }
+  }
+  return '/api';
+}
+
+const API_BASE = getApiBase();
 
 class APIClient {
   private async request<T>(
@@ -249,8 +264,13 @@ class APIClient {
     );
   }
 
-  // File picker
+  // File picker - uses Electron dialog when available, falls back to server
   async pickFiles(): Promise<string[]> {
+    // Use Electron's native dialog if available
+    if (typeof window !== 'undefined' && window.electronAPI?.pickFiles) {
+      return window.electronAPI.pickFiles();
+    }
+    // Fall back to server-side picker (AppleScript)
     const response = await this.request<{ files: string[] }>('POST', '/files/pick');
     return response.files;
   }

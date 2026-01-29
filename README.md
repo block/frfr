@@ -88,7 +88,14 @@ frfr/
 │       ├── api/               # API client
 │       ├── components/        # React components
 │       └── pages/             # Page components
-├── run.sh                      # Start script
+├── electron/                   # Electron desktop app
+│   ├── main/                  # Main process (backend lifecycle, IPC)
+│   ├── preload/               # Secure IPC bridge
+│   └── resources/             # Build resources
+├── scripts/                    # Build scripts
+│   ├── dev-electron.sh        # Development mode
+│   └── build-electron.sh      # Production build
+├── run.sh                      # Start web app
 └── docs/                       # Documentation
 ```
 
@@ -180,6 +187,50 @@ cd frontend && npm run dev
 # Build frontend for production
 cd frontend && npm run build
 ```
+
+## Desktop App (Electron)
+
+Build frfr as a standalone macOS application.
+
+### Development Mode
+
+```bash
+./scripts/dev-electron.sh
+```
+
+This starts the Go backend, Vite dev server, and Electron with hot reload.
+
+### Production Build
+
+```bash
+# Build for current architecture (arm64 on Apple Silicon, x64 on Intel)
+./scripts/build-electron.sh
+
+# Build for specific architecture
+./scripts/build-electron.sh --arch arm64   # Apple Silicon
+./scripts/build-electron.sh --arch x64     # Intel
+```
+
+Output in `electron/release/`:
+- `frfr-1.0.0-arm64.dmg` - Apple Silicon installer
+- `frfr-1.0.0.dmg` - Intel installer
+- `mac-arm64/frfr.app` - Apple Silicon app bundle
+- `mac/frfr.app` - Intel app bundle
+
+### Prerequisites
+
+- Node.js 18+
+- Go 1.21+
+
+The build script handles:
+1. Compiling Go backend for target architecture
+2. Building React frontend with Vite
+3. Compiling Electron TypeScript
+4. Packaging with electron-builder
+
+### Note on Code Signing
+
+The app is not code-signed by default. On first launch, right-click → Open to bypass Gatekeeper.
 
 ## Use Cases
 

@@ -56,3 +56,10 @@ inputs/
 output/
 outputs/
 /documents/
+
+# Electron
+electron/node_modules/
+electron/dist/
+electron/release/
+electron/resources/bin/arm64/
+electron/resources/bin/x64/

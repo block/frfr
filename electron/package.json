@@ -1,0 +1,26 @@
+{
+  "name": "frfr",
+  "version": "1.0.0",
+  "description": "High-confidence document Q&A using LLM fact extraction",
+  "main": "dist/main/index.js",
+  "author": "frfr",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc && electron .",
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac"
+  },
+  "dependencies": {
+    "get-port": "^5.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1",
+    "typescript": "^5.3.0"
+  },
+  "build": {
+    "extends": "./electron-builder.yml"
+  }
+}
