@@ -2,6 +2,7 @@ import { app, BrowserWindow } from 'electron';
 import { startBackend, stopBackend } from './backend';
 import { createWindow } from './window';
 import { setupIPC } from './ipc';
+import { initClaudeStatus } from './settings';
 
 let isQuitting = false;
 
@@ -9,6 +10,9 @@ async function initialize(): Promise<void> {
   console.log('[app] Initializing...');
 
   try {
+    // Pre-check Claude status (cached for instant access later)
+    initClaudeStatus();
+
     // Setup IPC handlers before creating window
     setupIPC();
 

@@ -2,6 +2,7 @@ import { spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import { app } from 'electron';
+import { loadSettings } from './settings';
 
 let serverProcess: ChildProcess | null = null;
 let serverPort: number | null = null;
@@ -18,9 +19,10 @@ function getBinaryPath(): string {
   }
 }
 
-function getDataPath(): string {
-  // Use app's userData directory for the database
-  return app.getPath('userData');
+function getWorkingPath(): string {
+  // Use working path from settings (defaults to ~/Documents/frfr)
+  const settings = loadSettings();
+  return settings.workingPath;
 }
 
 async function waitForServer(port: number, timeoutMs: number = 30000): Promise<boolean> {
@@ -55,10 +57,12 @@ export async function startBackend(): Promise<number> {
   const port = await getPort({ port: [8080, 8081, 8082, 8083, 8084, 8085] });
 
   const binaryPath = getBinaryPath();
-  const dataPath = getDataPath();
+  const workingPath = getWorkingPath();
+  const sessionsPath = path.join(workingPath, 'sessions');
+  const inputsPath = path.join(workingPath, 'inputs');
 
   console.log(`[backend] Binary path: ${binaryPath}`);
-  console.log(`[backend] Data path: ${dataPath}`);
+  console.log(`[backend] Working path: ${workingPath}`);
   console.log(`[backend] Starting on port: ${port}`);
 
   // Verify binary exists
@@ -66,17 +70,30 @@ export async function startBackend(): Promise<number> {
     throw new Error(`Backend binary not found at: ${binaryPath}`);
   }
 
-  // Ensure data directory exists
-  if (!fs.existsSync(dataPath)) {
-    fs.mkdirSync(dataPath, { recursive: true });
+  // Ensure directories exist
+  if (!fs.existsSync(sessionsPath)) {
+    fs.mkdirSync(sessionsPath, { recursive: true });
+  }
+  if (!fs.existsSync(inputsPath)) {
+    fs.mkdirSync(inputsPath, { recursive: true });
+  }
+
+  // Get API key from settings if set
+  const settings = loadSettings();
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    FRFR_PORT: String(port),
+    FRFR_DATA_DIR: sessionsPath,
+    FRFR_INPUTS_DIR: inputsPath,
+  };
+
+  // Only set API key if user has configured one (not using native claude)
+  if (settings.anthropicApiKey) {
+    env.ANTHROPIC_API_KEY = settings.anthropicApiKey;
   }
 
   serverProcess = spawn(binaryPath, [], {
-    env: {
-      ...process.env,
-      FRFR_PORT: String(port),
-      FRFR_DATA_DIR: dataPath,
-    },
+    env,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -141,4 +158,39 @@ export function getBackendPort(): number | null {
 
 export function isBackendRunning(): boolean {
   return serverProcess !== null && serverPort !== null;
+}
+
+export async function restartBackend(): Promise<number> {
+  console.log('[backend] Restarting server...');
+
+  // Stop current server
+  if (serverProcess) {
+    serverProcess.kill('SIGTERM');
+
+    // Wait for it to exit
+    await new Promise<void>((resolve) => {
+      if (!serverProcess) {
+        resolve();
+        return;
+      }
+
+      const timeout = setTimeout(() => {
+        if (serverProcess) {
+          serverProcess.kill('SIGKILL');
+        }
+        resolve();
+      }, 3000);
+
+      serverProcess.once('exit', () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+    });
+
+    serverProcess = null;
+    serverPort = null;
+  }
+
+  // Start with new settings
+  return startBackend();
 }
