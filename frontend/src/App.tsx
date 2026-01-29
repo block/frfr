@@ -1,11 +1,25 @@
+import { useState, useEffect } from 'react';
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
 import HomePage from './pages/HomePage';
 import SessionPage from './pages/SessionPage';
 import FactsPage from './pages/FactsPage';
 import QueryPage from './pages/QueryPage';
+import ClaudeStatusModal from './components/common/ClaudeStatusModal';
+import { api } from './api/client';
 
 function App() {
   const location = useLocation();
+  const [showClaudeModal, setShowClaudeModal] = useState(false);
+
+  useEffect(() => {
+    api.checkClaudeStatus().then((status) => {
+      if (!status.available) {
+        setShowClaudeModal(true);
+      }
+    }).catch((err) => {
+      console.error('Failed to check Claude status:', err);
+    });
+  }, []);
 
   return (
     <div className="app-layout">
@@ -38,6 +52,9 @@ function App() {
           </Routes>
         </div>
       </main>
+      {showClaudeModal && (
+        <ClaudeStatusModal onClose={() => setShowClaudeModal(false)} />
+      )}
     </div>
   );
 }

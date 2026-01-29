@@ -13,6 +13,7 @@ import type {
   APIError,
   BatchProgress,
   QueryStreamCallbacks,
+  ClaudeStatusResponse,
 } from './types';
 import '../types/electron.d.ts';
 
@@ -273,6 +274,11 @@ class APIClient {
     // Fall back to server-side picker (AppleScript)
     const response = await this.request<{ files: string[] }>('POST', '/files/pick');
     return response.files;
+  }
+
+  // Claude status
+  async checkClaudeStatus(): Promise<ClaudeStatusResponse> {
+    return this.request<ClaudeStatusResponse>('GET', '/claude/status');
   }
 
   // Processing

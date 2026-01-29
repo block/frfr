@@ -160,6 +160,13 @@ export interface AddDocumentRequest {
   name?: string;
 }
 
+// Claude status
+export interface ClaudeStatusResponse {
+  available: boolean;
+  mode: 'api' | 'native' | '';
+  error?: string;
+}
+
 // Error type
 export interface APIError {
   error: string;
