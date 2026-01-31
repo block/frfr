@@ -96,14 +96,15 @@ type ValidationResult struct {
 
 // Fact type constants
 const (
-	FactTypeTechnicalControl = "technical_control"
-	FactTypeOrganizational   = "organizational"
-	FactTypeProcess          = "process"
-	FactTypeMetric           = "metric"
-	FactTypeCUEC             = "CUEC"
-	FactTypeTestResult       = "test_result"
-	FactTypeArchitecture     = "architecture"
-	FactTypeCompliance       = "compliance"
+	FactTypeTechnicalControl  = "technical_control"
+	FactTypeOrganizational    = "organizational"
+	FactTypeProcess           = "process"
+	FactTypeMetric            = "metric"
+	FactTypeCUEC              = "CUEC"
+	FactTypeTestResult        = "test_result"
+	FactTypeArchitecture      = "architecture"
+	FactTypeCompliance        = "compliance"
+	FactTypeExternalReference = "external_reference"
 )
 
 // Control family constants

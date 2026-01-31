@@ -309,6 +309,7 @@ func buildExtractionPrompt(chunk models.ChunkInfo, documentName string, summary 
 3. Classify each fact by type and control family
 4. Include ALL quantitative values (percentages, frequencies, durations, counts)
 5. Extract WHO performs actions, WHEN they occur, and HOW
+6. Use "external_reference" for facts that cite external standards, frameworks, regulations, or third-party documents
 
 Respond with ONLY a JSON array of facts (no markdown, no explanation):
 [
@@ -320,7 +321,7 @@ Respond with ONLY a JSON array of facts (no markdown, no explanation):
       {"quote": "EXACT text from document", "source_location": "Lines X-Y", "relevance": "why this supports the claim"}
     ],
     "confidence": 0.95,
-    "fact_type": "technical_control|organizational|process|metric|CUEC|test_result|architecture|compliance",
+    "fact_type": "technical_control|organizational|process|metric|CUEC|test_result|architecture|compliance|external_reference",
     "control_family": "access_control|encryption|monitoring|backup_recovery|change_management|incident_response",
     "specificity_score": 0.8,
     "entities": ["named", "entities"],

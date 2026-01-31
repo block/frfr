@@ -16,14 +16,45 @@ function FactsPage() {
   const [typeFilter, setTypeFilter] = useState('');
   const [selectedFact, setSelectedFact] = useState<number | null>(null);
   const [factContext, setFactContext] = useState<FactContextResponse | null>(null);
+  const [availableTypes, setAvailableTypes] = useState<string[]>([]);
 
   const pageSize = 50;
+
+  useEffect(() => {
+    if (sessionId) {
+      loadAvailableTypes();
+    }
+  }, [sessionId]);
 
   useEffect(() => {
     if (sessionId) {
       loadFacts();
     }
   }, [sessionId, page, search, typeFilter]);
+
+  const loadAvailableTypes = async () => {
+    if (!sessionId) return;
+    try {
+      // Load all facts to get unique types (without pagination)
+      const response = await api.listFacts(sessionId, {
+        page: 1,
+        page_size: 10000, // Get all facts to extract types
+      });
+
+      // Extract unique fact types
+      const types = new Set<string>();
+      response.facts.forEach(fact => {
+        if (fact.fact_type) {
+          types.add(fact.fact_type);
+        }
+      });
+
+      // Sort alphabetically
+      setAvailableTypes(Array.from(types).sort());
+    } catch (e) {
+      console.error('Failed to load available types:', e);
+    }
+  };
 
   const loadFacts = async () => {
     if (!sessionId) return;
@@ -54,6 +85,14 @@ function FactsPage() {
     } catch (e) {
       console.error('Failed to load fact context:', e);
     }
+  };
+
+  const formatFactType = (type: string): string => {
+    // Convert snake_case to Title Case
+    return type
+      .split('_')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
   };
 
   const totalPages = Math.ceil(total / pageSize);
@@ -96,14 +135,11 @@ function FactsPage() {
               style={{ width: 'auto' }}
             >
               <option value="">All types</option>
-              <option value="technical_control">Technical Control</option>
-              <option value="organizational">Organizational</option>
-              <option value="process">Process</option>
-              <option value="metric">Metric</option>
-              <option value="CUEC">CUEC</option>
-              <option value="test_result">Test Result</option>
-              <option value="architecture">Architecture</option>
-              <option value="compliance">Compliance</option>
+              {availableTypes.map(type => (
+                <option key={type} value={type}>
+                  {formatFactType(type)}
+                </option>
+              ))}
             </select>
           </div>
 
