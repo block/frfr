@@ -251,140 +251,10 @@ func (h *ProcessingHandler) processDocuments(sessionID string, documents []strin
 		})
 
 		// Step 1: Extract text based on document source
-		var textContent string
 		textFile := filepath.Join(sessionDir, "text", docName+".txt")
-
-		if docInfo.Source == models.DocumentSourceSlack {
-			// Slack channel extraction
-			if docInfo.SlackMeta == nil {
-				h.store.UpdateDocumentStatus(sessionID, docName, models.DocumentStatusFailed, "missing slack metadata")
-				h.broadcast(sessionID, models.ProcessingEvent{
-					Type:      models.EventTypeError,
-					Timestamp: time.Now(),
-					Document:  docName,
-					Message:   "Slack document missing metadata",
-				})
-				continue
-			}
-
-			h.broadcast(sessionID, models.ProcessingEvent{
-				Type:      "slack_extraction_start",
-				Timestamp: time.Now(),
-				Document:  docName,
-				Message:   fmt.Sprintf("Fetching messages from Slack channel #%s...", docInfo.SlackMeta.ChannelName),
-			})
-
-			token := os.Getenv("SLACK_BOT_TOKEN")
-			slackExtractor := slackext.NewExtractor(token, h.config.SlackMaxMessages, h.config.SlackLookbackDays)
-
-			opts := slackext.ExtractOptions{IncludeThreads: true}
-			if docInfo.SlackMeta.Since != "" {
-				if t, err := time.Parse("2006-01-02", docInfo.SlackMeta.Since); err == nil {
-					opts.Since = t
-				}
-			}
-			if docInfo.SlackMeta.Until != "" {
-				if t, err := time.Parse("2006-01-02", docInfo.SlackMeta.Until); err == nil {
-					opts.Until = t
-				}
-			}
-
-			result, err := slackExtractor.Extract(ctx, docInfo.SlackMeta.ChannelID, textFile, opts)
-			if err != nil {
-				h.store.UpdateDocumentStatus(sessionID, docName, models.DocumentStatusFailed, err.Error())
-				h.broadcast(sessionID, models.ProcessingEvent{
-					Type:      models.EventTypeError,
-					Timestamp: time.Now(),
-					Document:  docName,
-					Message:   fmt.Sprintf("Slack extraction failed: %v", err),
-				})
-				continue
-			}
-
-			h.broadcast(sessionID, models.ProcessingEvent{
-				Type:      "slack_extraction_complete",
-				Timestamp: time.Now(),
-				Document:  docName,
-				Message:   fmt.Sprintf("Extracted %d messages (%d threads), %d characters from #%s",
-					result.MessageCount, result.ThreadCount, result.TotalChars, result.ChannelName),
-			})
-
-			data, err := os.ReadFile(textFile)
-			if err != nil {
-				h.store.UpdateDocumentStatus(sessionID, docName, models.DocumentStatusFailed, err.Error())
-				h.broadcast(sessionID, models.ProcessingEvent{
-					Type:      models.EventTypeError,
-					Timestamp: time.Now(),
-					Document:  docName,
-					Message:   fmt.Sprintf("Failed to read extracted text: %v", err),
-				})
-				continue
-			}
-			textContent = string(data)
-		} else {
-			// File-based extraction (PDF or plain text/markdown)
-			// Expand tilde in path (for paths like ~/Downloads/file.pdf)
-			pdfPath := expandTilde(docInfo.OriginalPDFPath)
-
-			if strings.HasSuffix(strings.ToLower(pdfPath), ".pdf") {
-				h.broadcast(sessionID, models.ProcessingEvent{
-					Type:      "pdf_extraction_start",
-					Timestamp: time.Now(),
-					Document:  docName,
-					Message:   "Extracting text from PDF...",
-				})
-
-				result, err := h.pdfExtractor.Extract(ctx, pdfPath, textFile)
-				if err != nil {
-					h.store.UpdateDocumentStatus(sessionID, docName, models.DocumentStatusFailed, err.Error())
-					h.broadcast(sessionID, models.ProcessingEvent{
-						Type:      models.EventTypeError,
-						Timestamp: time.Now(),
-						Document:  docName,
-						Message:   fmt.Sprintf("PDF extraction failed: %v", err),
-					})
-					continue
-				}
-
-				h.broadcast(sessionID, models.ProcessingEvent{
-					Type:      "pdf_extraction_complete",
-					Timestamp: time.Now(),
-					Document:  docName,
-					Message:   fmt.Sprintf("Extracted %d pages, %d characters using %s", result.Pages, result.TotalChars, result.Method),
-				})
-
-				// Read the extracted text
-				data, err := os.ReadFile(textFile)
-				if err != nil {
-					h.store.UpdateDocumentStatus(sessionID, docName, models.DocumentStatusFailed, err.Error())
-					h.broadcast(sessionID, models.ProcessingEvent{
-						Type:      models.EventTypeError,
-						Timestamp: time.Now(),
-						Document:  docName,
-						Message:   fmt.Sprintf("Failed to read extracted text: %v", err),
-					})
-					continue
-				}
-				textContent = string(data)
-			} else {
-				// For non-PDF files, try to read directly
-				data, err := os.ReadFile(pdfPath)
-				if err != nil {
-					h.store.UpdateDocumentStatus(sessionID, docName, models.DocumentStatusFailed, err.Error())
-					h.broadcast(sessionID, models.ProcessingEvent{
-						Type:      models.EventTypeError,
-						Timestamp: time.Now(),
-						Document:  docName,
-						Message:   fmt.Sprintf("Failed to read file: %v", err),
-					})
-					continue
-				}
-				textContent = string(data)
-
-				// Save to text directory
-				os.MkdirAll(filepath.Dir(textFile), 0755)
-				os.WriteFile(textFile, data, 0644)
-			}
+		textContent, err := h.extractText(ctx, sessionID, docName, docInfo, textFile)
+		if err != nil {
+			continue
 		}
 
 		// Step 2: Generate document summary and extract facts
@@ -504,4 +374,148 @@ func (h *ProcessingHandler) processDocuments(sessionID string, documents []strin
 		Message:   fmt.Sprintf("Processing complete: %d documents", totalDocs),
 		Progress:  1.0,
 	})
+}
+
+// extractText extracts text content from a document, dispatching to the appropriate
+// source-specific method. On failure it updates the document status and broadcasts
+// an error event, so callers can simply `continue` on error.
+func (h *ProcessingHandler) extractText(ctx context.Context, sessionID, docName string, docInfo models.DocumentInfo, textFile string) (string, error) {
+	if docInfo.Source == models.DocumentSourceSlack {
+		return h.extractSlackText(ctx, sessionID, docName, docInfo, textFile)
+	}
+	return h.extractFileText(ctx, sessionID, docName, docInfo, textFile)
+}
+
+// extractSlackText fetches messages from a Slack channel and returns the text content.
+func (h *ProcessingHandler) extractSlackText(ctx context.Context, sessionID, docName string, docInfo models.DocumentInfo, textFile string) (string, error) {
+	if docInfo.SlackMeta == nil {
+		h.store.UpdateDocumentStatus(sessionID, docName, models.DocumentStatusFailed, "missing slack metadata")
+		h.broadcast(sessionID, models.ProcessingEvent{
+			Type:      models.EventTypeError,
+			Timestamp: time.Now(),
+			Document:  docName,
+			Message:   "Slack document missing metadata",
+		})
+		return "", fmt.Errorf("missing slack metadata")
+	}
+
+	h.broadcast(sessionID, models.ProcessingEvent{
+		Type:      "slack_extraction_start",
+		Timestamp: time.Now(),
+		Document:  docName,
+		Message:   fmt.Sprintf("Fetching messages from Slack channel #%s...", docInfo.SlackMeta.ChannelName),
+	})
+
+	token := os.Getenv("SLACK_BOT_TOKEN")
+	slackExtractor := slackext.NewExtractor(token, h.config.SlackMaxMessages, h.config.SlackLookbackDays)
+
+	opts := slackext.ExtractOptions{IncludeThreads: true}
+	if docInfo.SlackMeta.Since != "" {
+		if t, err := time.Parse("2006-01-02", docInfo.SlackMeta.Since); err == nil {
+			opts.Since = t
+		}
+	}
+	if docInfo.SlackMeta.Until != "" {
+		if t, err := time.Parse("2006-01-02", docInfo.SlackMeta.Until); err == nil {
+			opts.Until = t
+		}
+	}
+
+	result, err := slackExtractor.Extract(ctx, docInfo.SlackMeta.ChannelID, textFile, opts)
+	if err != nil {
+		h.store.UpdateDocumentStatus(sessionID, docName, models.DocumentStatusFailed, err.Error())
+		h.broadcast(sessionID, models.ProcessingEvent{
+			Type:      models.EventTypeError,
+			Timestamp: time.Now(),
+			Document:  docName,
+			Message:   fmt.Sprintf("Slack extraction failed: %v", err),
+		})
+		return "", err
+	}
+
+	h.broadcast(sessionID, models.ProcessingEvent{
+		Type:      "slack_extraction_complete",
+		Timestamp: time.Now(),
+		Document:  docName,
+		Message:   fmt.Sprintf("Extracted %d messages (%d threads), %d characters from #%s",
+			result.MessageCount, result.ThreadCount, result.TotalChars, result.ChannelName),
+	})
+
+	data, err := os.ReadFile(textFile)
+	if err != nil {
+		h.store.UpdateDocumentStatus(sessionID, docName, models.DocumentStatusFailed, err.Error())
+		h.broadcast(sessionID, models.ProcessingEvent{
+			Type:      models.EventTypeError,
+			Timestamp: time.Now(),
+			Document:  docName,
+			Message:   fmt.Sprintf("Failed to read extracted text: %v", err),
+		})
+		return "", err
+	}
+	return string(data), nil
+}
+
+// extractFileText extracts text from a PDF or reads a plain text/markdown file.
+func (h *ProcessingHandler) extractFileText(ctx context.Context, sessionID, docName string, docInfo models.DocumentInfo, textFile string) (string, error) {
+	pdfPath := expandTilde(docInfo.OriginalPDFPath)
+
+	if strings.HasSuffix(strings.ToLower(pdfPath), ".pdf") {
+		h.broadcast(sessionID, models.ProcessingEvent{
+			Type:      "pdf_extraction_start",
+			Timestamp: time.Now(),
+			Document:  docName,
+			Message:   "Extracting text from PDF...",
+		})
+
+		result, err := h.pdfExtractor.Extract(ctx, pdfPath, textFile)
+		if err != nil {
+			h.store.UpdateDocumentStatus(sessionID, docName, models.DocumentStatusFailed, err.Error())
+			h.broadcast(sessionID, models.ProcessingEvent{
+				Type:      models.EventTypeError,
+				Timestamp: time.Now(),
+				Document:  docName,
+				Message:   fmt.Sprintf("PDF extraction failed: %v", err),
+			})
+			return "", err
+		}
+
+		h.broadcast(sessionID, models.ProcessingEvent{
+			Type:      "pdf_extraction_complete",
+			Timestamp: time.Now(),
+			Document:  docName,
+			Message:   fmt.Sprintf("Extracted %d pages, %d characters using %s", result.Pages, result.TotalChars, result.Method),
+		})
+
+		data, err := os.ReadFile(textFile)
+		if err != nil {
+			h.store.UpdateDocumentStatus(sessionID, docName, models.DocumentStatusFailed, err.Error())
+			h.broadcast(sessionID, models.ProcessingEvent{
+				Type:      models.EventTypeError,
+				Timestamp: time.Now(),
+				Document:  docName,
+				Message:   fmt.Sprintf("Failed to read extracted text: %v", err),
+			})
+			return "", err
+		}
+		return string(data), nil
+	}
+
+	// For non-PDF files, read directly
+	data, err := os.ReadFile(pdfPath)
+	if err != nil {
+		h.store.UpdateDocumentStatus(sessionID, docName, models.DocumentStatusFailed, err.Error())
+		h.broadcast(sessionID, models.ProcessingEvent{
+			Type:      models.EventTypeError,
+			Timestamp: time.Now(),
+			Document:  docName,
+			Message:   fmt.Sprintf("Failed to read file: %v", err),
+		})
+		return "", err
+	}
+
+	// Save to text directory
+	os.MkdirAll(filepath.Dir(textFile), 0755)
+	os.WriteFile(textFile, data, 0644)
+
+	return string(data), nil
 }
