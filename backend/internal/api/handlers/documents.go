@@ -56,7 +56,7 @@ func (h *DocumentHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var docs []DocumentListItem
+	docs := make([]DocumentListItem, 0)
 	for name, info := range sess.DocumentRegistry {
 		facts, _ := h.store.LoadDocumentFacts(sessionID, name)
 
