@@ -36,6 +36,7 @@ func (s *Server) registerRoutes() {
 	factsHandler := handlers.NewFactsHandler(s.sessionStore)
 	processingHandler := handlers.NewProcessingHandler(s.sessionStore, s.config)
 	queryHandler := handlers.NewQueryHandler(s.sessionStore, s.config)
+	slackHandler := handlers.NewSlackHandler(s.sessionStore, s.config)
 	filePickerHandler := handlers.NewFilePickerHandler()
 	claudeHandler := handlers.NewClaudeHandler(s.config)
 
@@ -59,6 +60,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /api/sessions/{id}/query", queryHandler.Submit)
 	s.mux.HandleFunc("POST /api/sessions/{id}/query/stream", queryHandler.SubmitStream)
 	s.mux.HandleFunc("GET /api/sessions/{id}/query/history", queryHandler.History)
+
+	// Slack
+	s.mux.HandleFunc("POST /api/sessions/{id}/slack", slackHandler.Add)
 
 	// Processing
 	s.mux.HandleFunc("POST /api/sessions/{id}/process", processingHandler.Start)

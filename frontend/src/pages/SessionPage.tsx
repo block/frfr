@@ -4,6 +4,7 @@ import { api } from '../api/client';
 import type { Session, DocumentListItem, ProcessingEvent } from '../api/types';
 import DocumentsTable from '../components/documents/DocumentsTable';
 import AddDocumentModal from '../components/documents/AddDocumentModal';
+import AddSlackChannelModal from '../components/documents/AddSlackChannelModal';
 import ProcessingView from '../components/processing/ProcessingView';
 
 function SessionPage() {
@@ -13,6 +14,7 @@ function SessionPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showAddDoc, setShowAddDoc] = useState(false);
+  const [showAddSlack, setShowAddSlack] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [events, setEvents] = useState<ProcessingEvent[]>([]);
   const subscriptionRef = useRef<(() => void) | null>(null);
@@ -205,6 +207,12 @@ function SessionPage() {
             )}
             <button
               className="btn btn-secondary"
+              onClick={() => setShowAddSlack(true)}
+            >
+              Import Slack
+            </button>
+            <button
+              className="btn btn-secondary"
               onClick={() => setShowAddDoc(true)}
             >
               Add Document
@@ -234,6 +242,17 @@ function SessionPage() {
           onClose={() => setShowAddDoc(false)}
           onAdded={() => {
             setShowAddDoc(false);
+            loadSession();
+          }}
+        />
+      )}
+
+      {showAddSlack && (
+        <AddSlackChannelModal
+          sessionId={sessionId!}
+          onClose={() => setShowAddSlack(false)}
+          onAdded={() => {
+            setShowAddSlack(false);
             loadSession();
           }}
         />

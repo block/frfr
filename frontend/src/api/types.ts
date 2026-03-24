@@ -160,6 +160,13 @@ export interface AddDocumentRequest {
   name?: string;
 }
 
+export interface AddSlackChannelRequest {
+  channel_id: string;
+  token?: string;
+  since?: string;
+  until?: string;
+}
+
 // Claude status
 export interface ClaudeStatusResponse {
   available: boolean;
