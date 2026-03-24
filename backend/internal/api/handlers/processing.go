@@ -249,71 +249,11 @@ func (h *ProcessingHandler) processDocuments(sessionID string, documents []strin
 			Progress:  float64(i) / float64(totalDocs),
 		})
 
-		// Step 1: Extract text from PDF (if it's a PDF)
-		var textContent string
+		// Step 1: Extract text from document
 		textFile := filepath.Join(sessionDir, "text", docName+".txt")
-
-		// Expand tilde in path (for paths like ~/Downloads/file.pdf)
-		pdfPath := expandTilde(docInfo.OriginalPDFPath)
-
-		if strings.HasSuffix(strings.ToLower(pdfPath), ".pdf") {
-			h.broadcast(sessionID, models.ProcessingEvent{
-				Type:      "pdf_extraction_start",
-				Timestamp: time.Now(),
-				Document:  docName,
-				Message:   "Extracting text from PDF...",
-			})
-
-			result, err := h.pdfExtractor.Extract(ctx, pdfPath, textFile)
-			if err != nil {
-				h.store.UpdateDocumentStatus(sessionID, docName, models.DocumentStatusFailed, err.Error())
-				h.broadcast(sessionID, models.ProcessingEvent{
-					Type:      models.EventTypeError,
-					Timestamp: time.Now(),
-					Document:  docName,
-					Message:   fmt.Sprintf("PDF extraction failed: %v", err),
-				})
-				continue
-			}
-
-			h.broadcast(sessionID, models.ProcessingEvent{
-				Type:      "pdf_extraction_complete",
-				Timestamp: time.Now(),
-				Document:  docName,
-				Message:   fmt.Sprintf("Extracted %d pages, %d characters using %s", result.Pages, result.TotalChars, result.Method),
-			})
-
-			// Read the extracted text
-			data, err := os.ReadFile(textFile)
-			if err != nil {
-				h.store.UpdateDocumentStatus(sessionID, docName, models.DocumentStatusFailed, err.Error())
-				h.broadcast(sessionID, models.ProcessingEvent{
-					Type:      models.EventTypeError,
-					Timestamp: time.Now(),
-					Document:  docName,
-					Message:   fmt.Sprintf("Failed to read extracted text: %v", err),
-				})
-				continue
-			}
-			textContent = string(data)
-		} else {
-			// For non-PDF files, try to read directly
-			data, err := os.ReadFile(pdfPath)
-			if err != nil {
-				h.store.UpdateDocumentStatus(sessionID, docName, models.DocumentStatusFailed, err.Error())
-				h.broadcast(sessionID, models.ProcessingEvent{
-					Type:      models.EventTypeError,
-					Timestamp: time.Now(),
-					Document:  docName,
-					Message:   fmt.Sprintf("Failed to read file: %v", err),
-				})
-				continue
-			}
-			textContent = string(data)
-
-			// Save to text directory
-			os.MkdirAll(filepath.Dir(textFile), 0755)
-			os.WriteFile(textFile, data, 0644)
+		textContent, err := h.extractFileText(ctx, sessionID, docName, docInfo, textFile)
+		if err != nil {
+			continue
 		}
 
 		// Step 2: Generate document summary and extract facts
@@ -433,4 +373,69 @@ func (h *ProcessingHandler) processDocuments(sessionID string, documents []strin
 		Message:   fmt.Sprintf("Processing complete: %d documents", totalDocs),
 		Progress:  1.0,
 	})
+}
+
+// extractFileText extracts text from a PDF or reads a plain text/markdown file.
+func (h *ProcessingHandler) extractFileText(ctx context.Context, sessionID, docName string, docInfo models.DocumentInfo, textFile string) (string, error) {
+	pdfPath := expandTilde(docInfo.OriginalPDFPath)
+
+	if strings.HasSuffix(strings.ToLower(pdfPath), ".pdf") {
+		h.broadcast(sessionID, models.ProcessingEvent{
+			Type:      "pdf_extraction_start",
+			Timestamp: time.Now(),
+			Document:  docName,
+			Message:   "Extracting text from PDF...",
+		})
+
+		result, err := h.pdfExtractor.Extract(ctx, pdfPath, textFile)
+		if err != nil {
+			h.store.UpdateDocumentStatus(sessionID, docName, models.DocumentStatusFailed, err.Error())
+			h.broadcast(sessionID, models.ProcessingEvent{
+				Type:      models.EventTypeError,
+				Timestamp: time.Now(),
+				Document:  docName,
+				Message:   fmt.Sprintf("PDF extraction failed: %v", err),
+			})
+			return "", err
+		}
+
+		h.broadcast(sessionID, models.ProcessingEvent{
+			Type:      "pdf_extraction_complete",
+			Timestamp: time.Now(),
+			Document:  docName,
+			Message:   fmt.Sprintf("Extracted %d pages, %d characters using %s", result.Pages, result.TotalChars, result.Method),
+		})
+
+		data, err := os.ReadFile(textFile)
+		if err != nil {
+			h.store.UpdateDocumentStatus(sessionID, docName, models.DocumentStatusFailed, err.Error())
+			h.broadcast(sessionID, models.ProcessingEvent{
+				Type:      models.EventTypeError,
+				Timestamp: time.Now(),
+				Document:  docName,
+				Message:   fmt.Sprintf("Failed to read extracted text: %v", err),
+			})
+			return "", err
+		}
+		return string(data), nil
+	}
+
+	// For non-PDF files, read directly
+	data, err := os.ReadFile(pdfPath)
+	if err != nil {
+		h.store.UpdateDocumentStatus(sessionID, docName, models.DocumentStatusFailed, err.Error())
+		h.broadcast(sessionID, models.ProcessingEvent{
+			Type:      models.EventTypeError,
+			Timestamp: time.Now(),
+			Document:  docName,
+			Message:   fmt.Sprintf("Failed to read file: %v", err),
+		})
+		return "", err
+	}
+
+	// Save to text directory
+	os.MkdirAll(filepath.Dir(textFile), 0755)
+	os.WriteFile(textFile, data, 0644)
+
+	return string(data), nil
 }
