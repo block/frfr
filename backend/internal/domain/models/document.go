@@ -10,6 +10,22 @@ const (
 	DocumentStatusFailed     DocumentStatus = "failed"
 )
 
+// DocumentSource indicates where a document came from
+type DocumentSource string
+
+const (
+	DocumentSourceFile  DocumentSource = ""      // Default: local file (PDF/Markdown)
+	DocumentSourceSlack DocumentSource = "slack"
+)
+
+// SlackDocumentMeta contains Slack-specific metadata for a document
+type SlackDocumentMeta struct {
+	ChannelID   string `json:"channel_id"`
+	ChannelName string `json:"channel_name,omitempty"`
+	Since       string `json:"since,omitempty"`
+	Until       string `json:"until,omitempty"`
+}
+
 // DocumentInfo contains metadata about a document in a session
 type DocumentInfo struct {
 	OriginalPDFPath string         `json:"original_pdf_path"`
@@ -20,6 +36,8 @@ type DocumentInfo struct {
 	AddedAt         FlexibleTime   `json:"added_at"`
 	CompletedAt     *FlexibleTime  `json:"completed_at,omitempty"`
 	ErrorMessage    string         `json:"error_message,omitempty"`
+	Source          DocumentSource     `json:"source,omitempty"`
+	SlackMeta       *SlackDocumentMeta `json:"slack_meta,omitempty"`
 }
 
 // DocumentSummary contains the LLM-generated summary of a document

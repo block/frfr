@@ -30,6 +30,10 @@ type Config struct {
 	AnthropicAPIKey string
 	MaxWorkers      int
 	MaxRetries      int
+
+	// Slack settings
+	SlackMaxMessages  int
+	SlackLookbackDays int
 }
 
 // DefaultConfig returns the default configuration
@@ -59,6 +63,10 @@ func DefaultConfig() *Config {
 		AnthropicAPIKey: getAnthropicAPIKey(),
 		MaxWorkers:      getEnvInt("FRFR_MAX_WORKERS", 20),
 		MaxRetries:      getEnvInt("FRFR_MAX_RETRIES", 3),
+
+		// Slack
+		SlackMaxMessages:  getEnvInt("FRFR_SLACK_MAX_MESSAGES", 1000),
+		SlackLookbackDays: getEnvInt("FRFR_SLACK_LOOKBACK_DAYS", 90),
 	}
 }
 
