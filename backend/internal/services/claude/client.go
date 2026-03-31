@@ -276,7 +276,7 @@ func (c *Client) streamViaCLI(ctx context.Context, req MessageRequest, onChunk S
 	if err != nil {
 		return "", fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
-	cmd.Stderr = nil
+	cmd.Stderr = io.Discard
 
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("failed to start claude CLI: %w", err)
@@ -288,15 +288,15 @@ func (c *Client) streamViaCLI(ctx context.Context, req MessageRequest, onChunk S
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// Parse stream-json lines for content_block_delta events
 		var event struct {
-			Type    string `json:"type"`
-			Message struct {
-				Content []struct {
+			Type  string `json:"type"`
+			Event struct {
+				Type  string `json:"type"`
+				Delta struct {
 					Type string `json:"type"`
 					Text string `json:"text"`
-				} `json:"content"`
-			} `json:"message"`
+				} `json:"delta"`
+			} `json:"event"`
 			Result string `json:"result"`
 		}
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
@@ -304,25 +304,18 @@ func (c *Client) streamViaCLI(ctx context.Context, req MessageRequest, onChunk S
 		}
 
 		switch event.Type {
-		case "assistant":
-			// Partial message - extract new text
-			if len(event.Message.Content) > 0 {
-				for _, block := range event.Message.Content {
-					if block.Type == "text" && len(block.Text) > len(fullText) {
-						chunk := block.Text[len(fullText):]
-						fullText = block.Text
-						if onChunk != nil {
-							onChunk(chunk)
-						}
-					}
+		case "stream_event":
+			if event.Event.Type == "content_block_delta" && event.Event.Delta.Type == "text_delta" {
+				fullText += event.Event.Delta.Text
+				if onChunk != nil {
+					onChunk(event.Event.Delta.Text)
 				}
 			}
 		case "result":
-			if event.Result != "" && event.Result != fullText {
-				if remaining := event.Result[len(fullText):]; remaining != "" {
-					if onChunk != nil {
-						onChunk(remaining)
-					}
+			if event.Result != "" && len(event.Result) > len(fullText) {
+				remaining := event.Result[len(fullText):]
+				if onChunk != nil {
+					onChunk(remaining)
 				}
 				fullText = event.Result
 			}
