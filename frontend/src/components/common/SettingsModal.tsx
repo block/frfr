@@ -243,7 +243,9 @@ function SettingsModal({ onClose }: Props) {
                 style={{ marginTop: '0.375rem' }}
               >
                 {settings.fastMode
-                  ? 'Same fidelity, faster output (higher cost)'
+                  ? isClaudeNativeAvailable && !settings.anthropicApiKey
+                    ? 'Requires an API key — not supported with native CLI auth'
+                    : 'Same fidelity, faster output (higher cost)'
                   : 'Standard speed (default)'}
               </p>
             </div>
