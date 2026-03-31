@@ -309,6 +309,12 @@ func (h *QueryHandler) SubmitStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Signal answering phase so the UI shows streaming text
+	sendEvent("progress", query.BatchProgress{
+		Phase:      "answering",
+		FactsFound: len(relevantFacts),
+	})
+
 	// Step 2: Stream the answer generation
 	answer, err := processor.GenerateAnswerStream(ctx, req.Query, relevantFacts, func(chunk string) {
 		sendEvent("answer_chunk", map[string]string{"text": chunk})
