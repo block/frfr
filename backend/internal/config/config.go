@@ -116,7 +116,7 @@ func getEnvFloat(key string, defaultValue float64) float64 {
 }
 
 // getAnthropicAPIKey returns explicit API key if set, empty string otherwise.
-// When empty, the Claude client will attempt to use native credentials.
+// When empty, the Claude client will attempt to use native credentials via the CLI.
 func getAnthropicAPIKey() string {
 	return os.Getenv("ANTHROPIC_API_KEY")
 }

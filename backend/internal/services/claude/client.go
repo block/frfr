@@ -283,7 +283,12 @@ func (c *Client) sendRequestViaCLI(ctx context.Context, req MessageRequest) (*Me
 	}
 
 	// Use claude CLI with --print flag for non-interactive output
-	cmd := exec.CommandContext(ctx, "claude", "--print", "--model", req.Model, prompt.String())
+	args := []string{"--print", "--model", req.Model}
+	if req.Speed == "fast" {
+		args = append(args, "--settings", `{"fastMode": true}`)
+	}
+	args = append(args, prompt.String())
+	cmd := exec.CommandContext(ctx, "claude", args...)
 
 	output, err := cmd.Output()
 	if err != nil {
