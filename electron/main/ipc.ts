@@ -56,7 +56,8 @@ export function setupIPC(): void {
     // Check if we need to restart the backend
     const needsRestart =
       newSettings.workingPath !== undefined && newSettings.workingPath !== oldSettings.workingPath ||
-      newSettings.anthropicApiKey !== undefined && newSettings.anthropicApiKey !== oldSettings.anthropicApiKey;
+      newSettings.anthropicApiKey !== undefined && newSettings.anthropicApiKey !== oldSettings.anthropicApiKey ||
+      newSettings.fastMode !== undefined && newSettings.fastMode !== oldSettings.fastMode;
 
     if (needsRestart) {
       const newPort = await restartBackend();

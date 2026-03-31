@@ -33,6 +33,11 @@ func main() {
 		} else {
 			log.Printf("Claude API: using native credentials (claude CLI)")
 		}
+		if cfg.FastMode {
+			log.Printf("Model: %s (fast mode)", cfg.SwarmModel)
+		} else {
+			log.Printf("Model: %s", cfg.SwarmModel)
+		}
 		if err := server.ListenAndServe(); err != nil {
 			log.Fatalf("Server error: %v", err)
 		}

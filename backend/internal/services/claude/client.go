@@ -15,7 +15,7 @@ import (
 const (
 	anthropicAPIURL  = "https://api.anthropic.com/v1/messages"
 	anthropicVersion = "2023-06-01"
-	defaultModel     = "claude-sonnet-4-20250514"
+	defaultModel     = "claude-opus-4-6"
 	defaultMaxTokens = 4096
 	defaultTimeout   = 10 * time.Minute
 )
@@ -27,6 +27,7 @@ type Client struct {
 	model      string
 	timeout    time.Duration
 	useNative  bool // Use native credentials (claude CLI) when no API key
+	fastMode   bool // Fast mode: same model, faster output via API speed parameter
 }
 
 // NewClient creates a new Claude API client.
@@ -49,6 +50,12 @@ func (c *Client) WithModel(model string) *Client {
 	return c
 }
 
+// WithFastMode enables fast mode (same model, faster output via API speed parameter)
+func (c *Client) WithFastMode(fast bool) *Client {
+	c.fastMode = fast
+	return c
+}
+
 // WithTimeout sets the request timeout
 func (c *Client) WithTimeout(timeout time.Duration) *Client {
 	c.timeout = timeout
@@ -60,6 +67,7 @@ func (c *Client) WithTimeout(timeout time.Duration) *Client {
 type MessageRequest struct {
 	Model     string    `json:"model"`
 	MaxTokens int       `json:"max_tokens"`
+	Speed     string    `json:"speed,omitempty"`
 	System    string    `json:"system,omitempty"`
 	Messages  []Message `json:"messages"`
 }
@@ -141,6 +149,9 @@ func (c *Client) Prompt(ctx context.Context, prompt string, opts *PromptOptions)
 			{Role: "user", Content: prompt},
 		},
 	}
+	if c.fastMode {
+		req.Speed = "fast"
+	}
 
 	resp, err := c.sendRequest(ctx, req)
 	if err != nil {
@@ -181,6 +192,9 @@ func (c *Client) PromptWithUsage(ctx context.Context, prompt string, opts *Promp
 		Messages: []Message{
 			{Role: "user", Content: prompt},
 		},
+	}
+	if c.fastMode {
+		req.Speed = "fast"
 	}
 
 	resp, err := c.sendRequest(ctx, req)
@@ -224,6 +238,9 @@ func (c *Client) sendRequestViaHTTP(ctx context.Context, req MessageRequest) (*M
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", c.apiKey)
 	httpReq.Header.Set("anthropic-version", anthropicVersion)
+	if c.fastMode {
+		httpReq.Header.Set("anthropic-beta", "fast-mode-2026-02-01")
+	}
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {

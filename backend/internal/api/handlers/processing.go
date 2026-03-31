@@ -223,7 +223,7 @@ func (h *ProcessingHandler) processDocuments(sessionID string, documents []strin
 	}
 
 	// Create Claude client (uses API key if available, otherwise tries native credentials)
-	claudeClient := claude.NewClient(h.config.AnthropicAPIKey)
+	claudeClient := claude.NewClient(h.config.AnthropicAPIKey).WithModel(h.config.SwarmModel).WithFastMode(h.config.FastMode)
 
 	totalDocs := len(documents)
 	for i, docName := range documents {

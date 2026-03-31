@@ -6,6 +6,7 @@ import { execSync } from 'child_process';
 export interface AppSettings {
   workingPath: string;
   anthropicApiKey: string;
+  fastMode: boolean;
 }
 
 const DEFAULT_WORKING_PATH = path.join(
@@ -22,6 +23,7 @@ function getDefaultSettings(): AppSettings {
   return {
     workingPath: DEFAULT_WORKING_PATH,
     anthropicApiKey: '',
+    fastMode: false,
   };
 }
 

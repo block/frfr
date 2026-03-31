@@ -20,6 +20,7 @@ type Config struct {
 	SwarmModel         string
 	JudgeModel         string
 	ConsensusThreshold float64
+	FastMode           bool
 
 	// Chunking settings
 	MinChunkChars int
@@ -35,6 +36,7 @@ type Config struct {
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
 	homeDir, _ := os.UserHomeDir()
+	fastMode := getEnv("FRFR_FAST_MODE", "") == "true"
 
 	return &Config{
 		// Server
@@ -46,9 +48,10 @@ func DefaultConfig() *Config {
 
 		// Extraction
 		SwarmSize:          getEnvInt("FRFR_SWARM_SIZE", 5),
-		SwarmModel:         getEnv("FRFR_SWARM_MODEL", "claude-sonnet-4"),
-		JudgeModel:         getEnv("FRFR_JUDGE_MODEL", "claude-opus-4"),
+		SwarmModel:         getEnv("FRFR_SWARM_MODEL", "claude-opus-4-6"),
+		JudgeModel:         getEnv("FRFR_JUDGE_MODEL", "claude-opus-4-6"),
 		ConsensusThreshold: getEnvFloat("FRFR_CONSENSUS_THRESHOLD", 0.8),
+		FastMode:           fastMode,
 
 		// Chunking
 		MinChunkChars: getEnvInt("FRFR_MIN_CHUNK_CHARS", 3000),

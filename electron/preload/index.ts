@@ -4,6 +4,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 interface AppSettings {
   workingPath: string;
   anthropicApiKey: string;
+  fastMode: boolean;
 }
 
 interface ClaudeNativeStatus {

@@ -92,6 +92,10 @@ export async function startBackend(): Promise<number> {
     env.ANTHROPIC_API_KEY = settings.anthropicApiKey;
   }
 
+  if (settings.fastMode) {
+    env.FRFR_FAST_MODE = 'true';
+  }
+
   serverProcess = spawn(binaryPath, [], {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
