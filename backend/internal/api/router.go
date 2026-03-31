@@ -67,8 +67,9 @@ func (s *Server) registerRoutes() {
 	// File picker (macOS native)
 	s.mux.HandleFunc("POST /api/files/pick", filePickerHandler.Pick)
 
-	// Claude status
+	// Claude status and config
 	s.mux.HandleFunc("GET /api/claude/status", claudeHandler.Status)
+	s.mux.HandleFunc("PUT /api/config/fast-mode", claudeHandler.SetFastMode)
 
 	// Health check
 	s.mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {

@@ -33,7 +33,7 @@ func main() {
 		} else {
 			log.Printf("Claude API: using native credentials (claude CLI)")
 		}
-		if cfg.FastMode {
+		if cfg.FastMode() {
 			log.Printf("Model: %s (fast mode)", cfg.SwarmModel)
 		} else {
 			log.Printf("Model: %s", cfg.SwarmModel)

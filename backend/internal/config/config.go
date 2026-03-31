@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync/atomic"
 )
 
 // Config holds all configuration for the frfr backend
@@ -20,7 +21,7 @@ type Config struct {
 	SwarmModel         string
 	JudgeModel         string
 	ConsensusThreshold float64
-	FastMode           bool
+	fastMode           atomic.Bool
 
 	// Chunking settings
 	MinChunkChars int
@@ -36,9 +37,7 @@ type Config struct {
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
 	homeDir, _ := os.UserHomeDir()
-	fastMode := getEnv("FRFR_FAST_MODE", "") == "true"
-
-	return &Config{
+	cfg := &Config{
 		// Server
 		Port: getEnv("FRFR_PORT", "8080"),
 
@@ -51,7 +50,6 @@ func DefaultConfig() *Config {
 		SwarmModel:         getEnv("FRFR_SWARM_MODEL", "claude-opus-4-6"),
 		JudgeModel:         getEnv("FRFR_JUDGE_MODEL", "claude-opus-4-6"),
 		ConsensusThreshold: getEnvFloat("FRFR_CONSENSUS_THRESHOLD", 0.8),
-		FastMode:           fastMode,
 
 		// Chunking
 		MinChunkChars: getEnvInt("FRFR_MIN_CHUNK_CHARS", 3000),
@@ -63,6 +61,18 @@ func DefaultConfig() *Config {
 		MaxWorkers:      getEnvInt("FRFR_MAX_WORKERS", 20),
 		MaxRetries:      getEnvInt("FRFR_MAX_RETRIES", 3),
 	}
+	cfg.SetFastMode(getEnv("FRFR_FAST_MODE", "") == "true")
+	return cfg
+}
+
+// FastMode returns whether fast mode is enabled
+func (c *Config) FastMode() bool {
+	return c.fastMode.Load()
+}
+
+// SetFastMode enables or disables fast mode at runtime
+func (c *Config) SetFastMode(enabled bool) {
+	c.fastMode.Store(enabled)
 }
 
 // Load loads configuration, creating directories if needed

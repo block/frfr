@@ -9,6 +9,20 @@ import {
   type AppSettings,
 } from './settings';
 
+async function setBackendFastMode(fastMode: boolean): Promise<void> {
+  const port = getBackendPort();
+  if (!port) return;
+  try {
+    await fetch(`http://127.0.0.1:${port}/api/config/fast-mode`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fastMode }),
+    });
+  } catch (error) {
+    console.error('[settings] Failed to set fast mode:', error);
+  }
+}
+
 export function setupIPC(): void {
   // Get backend port
   ipcMain.handle('get-backend-port', () => {
@@ -53,11 +67,15 @@ export function setupIPC(): void {
     const oldSettings = loadSettings();
     const saved = saveSettings(newSettings);
 
+    // Toggle fast mode at runtime (no restart needed)
+    if (newSettings.fastMode !== undefined && newSettings.fastMode !== oldSettings.fastMode) {
+      await setBackendFastMode(newSettings.fastMode);
+    }
+
     // Check if we need to restart the backend
     const needsRestart =
       newSettings.workingPath !== undefined && newSettings.workingPath !== oldSettings.workingPath ||
-      newSettings.anthropicApiKey !== undefined && newSettings.anthropicApiKey !== oldSettings.anthropicApiKey ||
-      newSettings.fastMode !== undefined && newSettings.fastMode !== oldSettings.fastMode;
+      newSettings.anthropicApiKey !== undefined && newSettings.anthropicApiKey !== oldSettings.anthropicApiKey;
 
     if (needsRestart) {
       const newPort = await restartBackend();

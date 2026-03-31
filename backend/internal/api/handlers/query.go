@@ -103,7 +103,7 @@ func (h *QueryHandler) Submit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create Claude client and query processor
-	claudeClient := claude.NewClient(h.config.AnthropicAPIKey).WithModel(h.config.SwarmModel).WithFastMode(h.config.FastMode)
+	claudeClient := claude.NewClient(h.config.AnthropicAPIKey).WithModel(h.config.SwarmModel).WithFastMode(h.config.FastMode())
 	sessionDir := h.store.GetSessionDir(sessionID)
 	chunkManager := query.NewChunkManager(sessionDir)
 	chunkManager.LoadChunks() // Load chunks for context retrieval
@@ -279,7 +279,7 @@ func (h *QueryHandler) SubmitStream(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Create Claude client and query processor
-	claudeClient := claude.NewClient(h.config.AnthropicAPIKey).WithModel(h.config.SwarmModel).WithFastMode(h.config.FastMode)
+	claudeClient := claude.NewClient(h.config.AnthropicAPIKey).WithModel(h.config.SwarmModel).WithFastMode(h.config.FastMode())
 	sessionDir := h.store.GetSessionDir(sessionID)
 	chunkManager := query.NewChunkManager(sessionDir)
 	chunkManager.LoadChunks()
