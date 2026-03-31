@@ -230,6 +230,9 @@ class APIClient {
                   case 'status':
                     callbacks.onStatus?.(parsed);
                     break;
+                  case 'answer_chunk':
+                    callbacks.onAnswerChunk?.(parsed.text);
+                    break;
                   case 'result':
                     callbacks.onResult?.(parsed as QueryResponse);
                     break;

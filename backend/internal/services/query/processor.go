@@ -123,6 +123,25 @@ func (p *Processor) ProcessQuery(ctx context.Context, query string) (*QueryResul
 	}, nil
 }
 
+// SelectRelevantFacts selects facts relevant to the query using LLM with keyword fallback.
+func (p *Processor) SelectRelevantFacts(ctx context.Context, query string) ([]models.ExtractedFact, error) {
+	facts, err := p.selectRelevantFactsWithLLM(ctx, query)
+	if err != nil {
+		facts = p.findRelevantFacts(query)
+	}
+	return facts, nil
+}
+
+// SimpleFallbackAnswer generates a simple answer without Claude
+func (p *Processor) SimpleFallbackAnswer(query string, facts []models.ExtractedFact) string {
+	return p.simpleFallbackAnswer(query, facts)
+}
+
+// BuildSources builds source results from facts
+func (p *Processor) BuildSources(facts []models.ExtractedFact) []SourceResult {
+	return p.buildSources(facts)
+}
+
 // selectRelevantFactsWithLLM uses Claude to identify which facts are relevant to the query.
 // For large fact sets, it splits into batches and processes them in parallel.
 func (p *Processor) selectRelevantFactsWithLLM(ctx context.Context, query string) ([]models.ExtractedFact, error) {
@@ -499,13 +518,29 @@ func (p *Processor) buildSources(facts []models.ExtractedFact) []SourceResult {
 	return sources
 }
 
-// generateAnswer generates an answer using Claude
-func (p *Processor) generateAnswer(ctx context.Context, query string, facts []models.ExtractedFact) (string, error) {
+// AnswerStreamCallback is called with each chunk of the answer as it's generated
+type AnswerStreamCallback func(chunk string)
+
+// GenerateAnswerStream generates an answer using Claude with streaming output.
+// Returns the full answer text when complete.
+func (p *Processor) GenerateAnswerStream(ctx context.Context, query string, facts []models.ExtractedFact, onChunk AnswerStreamCallback) (string, error) {
 	if p.client == nil {
 		return "", fmt.Errorf("no Claude client available")
 	}
 
-	// Build prompt - use canonical FactIndex for citations so they match the browsable fact list
+	prompt := p.buildAnswerPrompt(query, facts)
+
+	return p.client.PromptStream(ctx, prompt, &claude.PromptOptions{
+		MaxTokens: 2000,
+	}, func(chunk string) {
+		if onChunk != nil {
+			onChunk(chunk)
+		}
+	})
+}
+
+// buildAnswerPrompt builds the prompt for answer generation
+func (p *Processor) buildAnswerPrompt(query string, facts []models.ExtractedFact) string {
 	var sb strings.Builder
 	sb.WriteString("Based on the following extracted facts from official documents, answer this question:\n\n")
 	sb.WriteString(fmt.Sprintf("Question: %s\n\n", query))
@@ -526,7 +561,16 @@ func (p *Processor) generateAnswer(ctx context.Context, query string, facts []mo
 	sb.WriteString("4. If the facts don't fully answer the question, say what's missing.\n")
 	sb.WriteString("\nExample format: \"The system uses encryption [42] and requires authentication [156].\"\n")
 
-	response, err := p.client.Prompt(ctx, sb.String(), &claude.PromptOptions{
+	return sb.String()
+}
+
+// generateAnswer generates an answer using Claude
+func (p *Processor) generateAnswer(ctx context.Context, query string, facts []models.ExtractedFact) (string, error) {
+	if p.client == nil {
+		return "", fmt.Errorf("no Claude client available")
+	}
+
+	response, err := p.client.Prompt(ctx, p.buildAnswerPrompt(query, facts), &claude.PromptOptions{
 		MaxTokens: 2000,
 	})
 	if err != nil {

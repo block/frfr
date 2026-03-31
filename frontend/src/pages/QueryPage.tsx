@@ -14,6 +14,7 @@ function QueryPage() {
   const [selectedSourceIndex, setSelectedSourceIndex] = useState<number | null>(null);
   const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
   const [totalFacts, setTotalFacts] = useState<number | null>(null);
+  const [streamingAnswer, setStreamingAnswer] = useState<string>('');
   const abortRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -48,6 +49,7 @@ function QueryPage() {
     setCurrentResponse(null);
     setBatchProgress(null);
     setTotalFacts(null);
+    setStreamingAnswer('');
 
     abortRef.current = api.submitQueryStream(sessionId, { query }, {
       onStatus: (status) => {
@@ -58,8 +60,12 @@ function QueryPage() {
       onProgress: (progress) => {
         setBatchProgress(progress);
       },
+      onAnswerChunk: (chunk) => {
+        setStreamingAnswer((prev) => prev + chunk);
+      },
       onResult: (result) => {
         setCurrentResponse(result);
+        setStreamingAnswer('');
         setLoading(false);
         setBatchProgress(null);
         loadHistory();
@@ -68,6 +74,7 @@ function QueryPage() {
         setError(err.message);
         setLoading(false);
         setBatchProgress(null);
+        setStreamingAnswer('');
       },
     });
   };
@@ -94,6 +101,7 @@ function QueryPage() {
             selectedSourceIndex={selectedSourceIndex}
             batchProgress={batchProgress}
             totalFacts={totalFacts}
+            streamingAnswer={streamingAnswer}
           />
 
           {/* History */}

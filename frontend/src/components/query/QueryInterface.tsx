@@ -10,6 +10,7 @@ interface Props {
   selectedSourceIndex: number | null;
   batchProgress: BatchProgress | null;
   totalFacts: number | null;
+  streamingAnswer?: string;
 }
 
 // Parse answer text and make citation references clickable
@@ -102,7 +103,7 @@ function renderAnswerWithCitations(
   return parts;
 }
 
-function QueryInterface({ onSubmit, loading, error, response, onSourceClick, selectedSourceIndex, batchProgress, totalFacts }: Props) {
+function QueryInterface({ onSubmit, loading, error, response, onSourceClick, selectedSourceIndex, batchProgress, totalFacts, streamingAnswer }: Props) {
   const [query, setQuery] = useState('');
 
   // Get the fact_index of the currently selected source for highlighting
@@ -250,21 +251,27 @@ function QueryInterface({ onSubmit, loading, error, response, onSourceClick, sel
               </div>
             </>
           ) : (
-            /* Answering phase display */
-            <div className="flex items-center gap-3 text-sm">
-              <div
-                style={{
-                  width: '16px',
-                  height: '16px',
-                  borderRadius: '50%',
-                  backgroundColor: 'var(--color-primary)',
-                  animation: 'pulse 1.5s infinite',
-                }}
-              />
-              <span>
-                Passing {batchProgress.facts_found} relevant facts to Claude for final answer...
-              </span>
-            </div>
+            streamingAnswer ? (
+              <div className="mt-2" style={{ lineHeight: '1.6', whiteSpace: 'pre-wrap' }}>
+                {streamingAnswer}
+                <span style={{ animation: 'pulse 1s infinite', opacity: 0.6 }}>&#9608;</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-3 text-sm">
+                <div
+                  style={{
+                    width: '16px',
+                    height: '16px',
+                    borderRadius: '50%',
+                    backgroundColor: 'var(--color-primary)',
+                    animation: 'pulse 1.5s infinite',
+                  }}
+                />
+                <span>
+                  Passing {batchProgress.facts_found} relevant facts to Claude for final answer...
+                </span>
+              </div>
+            )
           )}
 
           <style>{`

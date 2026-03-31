@@ -290,17 +290,38 @@ func (h *QueryHandler) SubmitStream(w http.ResponseWriter, r *http.Request) {
 		sendEvent("progress", progress)
 	})
 
-	// Process query with Claude
+	// Process query: select facts, then stream the answer
 	ctx := context.Background()
-	maxPasses := req.MaxPasses
-	if maxPasses <= 0 {
-		maxPasses = 1
+
+	// Step 1: Select relevant facts (blocking)
+	relevantFacts, err := processor.SelectRelevantFacts(ctx, req.Query)
+	if err != nil {
+		sendEvent("error", map[string]string{"message": "Fact selection failed: " + err.Error()})
+		return
+	}
+	if len(relevantFacts) == 0 {
+		sendEvent("result", QueryResponse{
+			Query:    req.Query,
+			Answer:   "I couldn't find any relevant information in the documents to answer this question.",
+			Sources:  []SourceEvidence{},
+			Duration: time.Since(start).String(),
+		})
+		return
 	}
 
-	result, err := processor.MultiPassQuery(ctx, req.Query, maxPasses)
+	// Step 2: Stream the answer generation
+	answer, err := processor.GenerateAnswerStream(ctx, req.Query, relevantFacts, func(chunk string) {
+		sendEvent("answer_chunk", map[string]string{"text": chunk})
+	})
 	if err != nil {
-		sendEvent("error", map[string]string{"message": "Query processing failed: " + err.Error()})
-		return
+		// Fallback to simple answer
+		answer = processor.SimpleFallbackAnswer(req.Query, relevantFacts)
+	}
+
+	result := &query.QueryResult{
+		Query:   req.Query,
+		Answer:  answer,
+		Sources: processor.BuildSources(relevantFacts),
 	}
 
 	// Convert to response format
