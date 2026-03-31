@@ -130,7 +130,7 @@ func (p *Processor) selectRelevantFactsWithLLM(ctx context.Context, query string
 		return nil, fmt.Errorf("no Claude client available")
 	}
 
-	const batchSize = 150 // Facts per batch - balances token limits with parallelism
+	const batchSize = 500 // Facts per batch - larger batches reduce CLI subprocess overhead
 	numFacts := len(p.facts)
 
 	if numFacts == 0 {
