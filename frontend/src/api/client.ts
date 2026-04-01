@@ -10,6 +10,7 @@ import type {
   ProcessingEvent,
   CreateSessionRequest,
   AddDocumentRequest,
+  AddSlackChannelRequest,
   APIError,
   BatchProgress,
   QueryStreamCallbacks,
@@ -108,6 +109,17 @@ class APIClient {
     return this.request<DocumentListItem>(
       'POST',
       `/sessions/${sessionId}/documents`,
+      req
+    );
+  }
+
+  async addSlackChannel(
+    sessionId: string,
+    req: AddSlackChannelRequest
+  ): Promise<DocumentListItem> {
+    return this.request<DocumentListItem>(
+      'POST',
+      `/sessions/${sessionId}/slack`,
       req
     );
   }
