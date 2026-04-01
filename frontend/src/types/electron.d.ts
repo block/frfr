@@ -1,6 +1,7 @@
 export interface AppSettings {
   workingPath: string;
   anthropicApiKey: string;
+  fastMode: boolean;
 }
 
 export interface ClaudeNativeStatus {

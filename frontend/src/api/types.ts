@@ -127,6 +127,8 @@ export interface BatchProgress {
 export interface QueryStreamCallbacks {
   onProgress?: (progress: BatchProgress) => void;
   onStatus?: (status: { message: string; totalFacts?: number }) => void;
+  onAnswerChunk?: (chunk: string) => void;
+  onSources?: (sources: SourceEvidence[]) => void;
   onResult?: (result: QueryResponse) => void;
   onError?: (error: { message: string }) => void;
 }

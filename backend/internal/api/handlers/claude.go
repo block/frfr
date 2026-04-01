@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"os/exec"
 
@@ -49,4 +50,17 @@ func (h *ClaudeHandler) Status(w http.ResponseWriter, r *http.Request) {
 	response.Available = false
 	response.Error = "Claude is not configured. Set ANTHROPIC_API_KEY environment variable or install the Claude CLI."
 	writeJSON(w, http.StatusOK, response)
+}
+
+// SetFastMode toggles fast mode at runtime without a restart
+func (h *ClaudeHandler) SetFastMode(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FastMode bool `json:"fastMode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	h.config.SetFastMode(req.FastMode)
+	writeJSON(w, http.StatusOK, map[string]bool{"fastMode": req.FastMode})
 }

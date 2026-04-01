@@ -103,7 +103,7 @@ func (h *QueryHandler) Submit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create Claude client and query processor
-	claudeClient := claude.NewClient(h.config.AnthropicAPIKey)
+	claudeClient := claude.NewClient(h.config.AnthropicAPIKey).WithModel(h.config.SwarmModel).WithFastMode(h.config.FastMode())
 	sessionDir := h.store.GetSessionDir(sessionID)
 	chunkManager := query.NewChunkManager(sessionDir)
 	chunkManager.LoadChunks() // Load chunks for context retrieval
@@ -279,7 +279,7 @@ func (h *QueryHandler) SubmitStream(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Create Claude client and query processor
-	claudeClient := claude.NewClient(h.config.AnthropicAPIKey)
+	claudeClient := claude.NewClient(h.config.AnthropicAPIKey).WithModel(h.config.SwarmModel).WithFastMode(h.config.FastMode())
 	sessionDir := h.store.GetSessionDir(sessionID)
 	chunkManager := query.NewChunkManager(sessionDir)
 	chunkManager.LoadChunks()
@@ -290,22 +290,31 @@ func (h *QueryHandler) SubmitStream(w http.ResponseWriter, r *http.Request) {
 		sendEvent("progress", progress)
 	})
 
-	// Process query with Claude
+	// Process query: select facts, then stream the answer
 	ctx := context.Background()
-	maxPasses := req.MaxPasses
-	if maxPasses <= 0 {
-		maxPasses = 1
-	}
 
-	result, err := processor.MultiPassQuery(ctx, req.Query, maxPasses)
+	// Step 1: Select relevant facts (blocking)
+	relevantFacts, err := processor.SelectRelevantFacts(ctx, req.Query)
 	if err != nil {
-		sendEvent("error", map[string]string{"message": "Query processing failed: " + err.Error()})
+		sendEvent("error", map[string]string{"message": "Fact selection failed: " + err.Error()})
+		return
+	}
+	if len(relevantFacts) == 0 {
+		sendEvent("result", QueryResponse{
+			Query:    req.Query,
+			Answer:   "I couldn't find any relevant information in the documents to answer this question.",
+			Sources:  []SourceEvidence{},
+			Duration: time.Since(start).String(),
+		})
 		return
 	}
 
-	// Convert to response format
+	// Build sources now so we can send them before streaming starts
+	builtSources := processor.BuildSources(relevantFacts)
+
+	// Convert to response format early for citation rendering during streaming
 	var sources []SourceEvidence
-	for _, src := range result.Sources {
+	for _, src := range builtSources {
 		source := SourceEvidence{
 			FactIndex:  src.FactIndex,
 			Claim:      src.Claim,
@@ -380,12 +389,29 @@ func (h *QueryHandler) SubmitStream(w http.ResponseWriter, r *http.Request) {
 		sources = append(sources, source)
 	}
 
+	// Send sources early so citations render during streaming
+	sendEvent("sources", sources)
+
+	// Signal answering phase so the UI shows streaming text
+	sendEvent("progress", query.BatchProgress{
+		Phase:      "answering",
+		FactsFound: len(relevantFacts),
+	})
+
+	// Step 2: Stream the answer generation
+	answer, err := processor.GenerateAnswerStream(ctx, req.Query, relevantFacts, func(chunk string) {
+		sendEvent("answer_chunk", map[string]string{"text": chunk})
+	})
+	if err != nil {
+		answer = processor.SimpleFallbackAnswer(req.Query, relevantFacts)
+	}
+
 	duration := time.Since(start)
 
 	// Store in history
 	historyEntry := models.QueryHistoryEntry{
 		Query:     req.Query,
-		Answer:    result.Answer,
+		Answer:    answer,
 		Timestamp: time.Now(),
 	}
 	for _, s := range sources {
@@ -396,7 +422,7 @@ func (h *QueryHandler) SubmitStream(w http.ResponseWriter, r *http.Request) {
 	// Send final result
 	sendEvent("result", QueryResponse{
 		Query:    req.Query,
-		Answer:   result.Answer,
+		Answer:   answer,
 		Sources:  sources,
 		Duration: duration.String(),
 	})

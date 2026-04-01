@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../api/client';
-import type { QueryResponse, QueryHistoryEntry, BatchProgress } from '../api/types';
+import type { QueryResponse, QueryHistoryEntry, BatchProgress, SourceEvidence } from '../api/types';
 import QueryInterface from '../components/query/QueryInterface';
 import SourceContextPanel from '../components/query/SourceContextPanel';
 
@@ -14,6 +14,8 @@ function QueryPage() {
   const [selectedSourceIndex, setSelectedSourceIndex] = useState<number | null>(null);
   const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
   const [totalFacts, setTotalFacts] = useState<number | null>(null);
+  const [streamingAnswer, setStreamingAnswer] = useState<string>('');
+  const [streamingSources, setStreamingSources] = useState<SourceEvidence[]>([]);
   const abortRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -48,6 +50,8 @@ function QueryPage() {
     setCurrentResponse(null);
     setBatchProgress(null);
     setTotalFacts(null);
+    setStreamingAnswer('');
+    setStreamingSources([]);
 
     abortRef.current = api.submitQueryStream(sessionId, { query }, {
       onStatus: (status) => {
@@ -58,8 +62,16 @@ function QueryPage() {
       onProgress: (progress) => {
         setBatchProgress(progress);
       },
+      onSources: (sources) => {
+        setStreamingSources(sources);
+      },
+      onAnswerChunk: (chunk) => {
+        setStreamingAnswer((prev) => prev + chunk);
+      },
       onResult: (result) => {
         setCurrentResponse(result);
+        setStreamingAnswer('');
+        setStreamingSources([]);
         setLoading(false);
         setBatchProgress(null);
         loadHistory();
@@ -68,6 +80,7 @@ function QueryPage() {
         setError(err.message);
         setLoading(false);
         setBatchProgress(null);
+        setStreamingAnswer('');
       },
     });
   };
@@ -94,6 +107,8 @@ function QueryPage() {
             selectedSourceIndex={selectedSourceIndex}
             batchProgress={batchProgress}
             totalFacts={totalFacts}
+            streamingAnswer={streamingAnswer}
+            streamingSources={streamingSources}
           />
 
           {/* History */}
@@ -122,21 +137,25 @@ function QueryPage() {
         </div>
 
         {/* Source context panel - sticky */}
-        {currentResponse && selectedSourceIndex !== null && (
-          <div style={{
-            width: '40%',
-            position: 'sticky',
-            top: 0,
-            alignSelf: 'flex-start',
-            maxHeight: '100%',
-            overflowY: 'auto'
-          }}>
-            <SourceContextPanel
-              source={currentResponse.sources[selectedSourceIndex]}
-              onClose={() => setSelectedSourceIndex(null)}
-            />
-          </div>
-        )}
+        {selectedSourceIndex !== null && (() => {
+          const sources = currentResponse?.sources ?? streamingSources;
+          const source = sources?.[selectedSourceIndex];
+          return source ? (
+            <div style={{
+              width: '40%',
+              position: 'sticky',
+              top: 0,
+              alignSelf: 'flex-start',
+              maxHeight: '100%',
+              overflowY: 'auto'
+            }}>
+              <SourceContextPanel
+                source={source}
+                onClose={() => setSelectedSourceIndex(null)}
+              />
+            </div>
+          ) : null;
+        })()}
       </div>
     </div>
   );

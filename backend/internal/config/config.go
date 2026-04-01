@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync/atomic"
 )
 
 // Config holds all configuration for the frfr backend
@@ -20,6 +21,7 @@ type Config struct {
 	SwarmModel         string
 	JudgeModel         string
 	ConsensusThreshold float64
+	fastMode           atomic.Bool
 
 	// Chunking settings
 	MinChunkChars int
@@ -35,8 +37,7 @@ type Config struct {
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
 	homeDir, _ := os.UserHomeDir()
-
-	return &Config{
+	cfg := &Config{
 		// Server
 		Port: getEnv("FRFR_PORT", "8080"),
 
@@ -46,8 +47,8 @@ func DefaultConfig() *Config {
 
 		// Extraction
 		SwarmSize:          getEnvInt("FRFR_SWARM_SIZE", 5),
-		SwarmModel:         getEnv("FRFR_SWARM_MODEL", "claude-sonnet-4"),
-		JudgeModel:         getEnv("FRFR_JUDGE_MODEL", "claude-opus-4"),
+		SwarmModel:         getEnv("FRFR_SWARM_MODEL", "claude-opus-4-6"),
+		JudgeModel:         getEnv("FRFR_JUDGE_MODEL", "claude-opus-4-6"),
 		ConsensusThreshold: getEnvFloat("FRFR_CONSENSUS_THRESHOLD", 0.8),
 
 		// Chunking
@@ -60,6 +61,18 @@ func DefaultConfig() *Config {
 		MaxWorkers:      getEnvInt("FRFR_MAX_WORKERS", 20),
 		MaxRetries:      getEnvInt("FRFR_MAX_RETRIES", 3),
 	}
+	cfg.SetFastMode(getEnv("FRFR_FAST_MODE", "") == "true")
+	return cfg
+}
+
+// FastMode returns whether fast mode is enabled
+func (c *Config) FastMode() bool {
+	return c.fastMode.Load()
+}
+
+// SetFastMode enables or disables fast mode at runtime
+func (c *Config) SetFastMode(enabled bool) {
+	c.fastMode.Store(enabled)
 }
 
 // Load loads configuration, creating directories if needed
@@ -103,7 +116,7 @@ func getEnvFloat(key string, defaultValue float64) float64 {
 }
 
 // getAnthropicAPIKey returns explicit API key if set, empty string otherwise.
-// When empty, the Claude client will attempt to use native credentials.
+// When empty, the Claude client will attempt to use native credentials via the CLI.
 func getAnthropicAPIKey() string {
 	return os.Getenv("ANTHROPIC_API_KEY")
 }

@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -15,7 +16,7 @@ import (
 const (
 	anthropicAPIURL  = "https://api.anthropic.com/v1/messages"
 	anthropicVersion = "2023-06-01"
-	defaultModel     = "claude-sonnet-4-20250514"
+	defaultModel     = "claude-opus-4-6"
 	defaultMaxTokens = 4096
 	defaultTimeout   = 10 * time.Minute
 )
@@ -27,6 +28,7 @@ type Client struct {
 	model      string
 	timeout    time.Duration
 	useNative  bool // Use native credentials (claude CLI) when no API key
+	fastMode   bool // Fast mode: same model, faster output via API speed parameter
 }
 
 // NewClient creates a new Claude API client.
@@ -49,6 +51,12 @@ func (c *Client) WithModel(model string) *Client {
 	return c
 }
 
+// WithFastMode enables fast mode (same model, faster output via API speed parameter)
+func (c *Client) WithFastMode(fast bool) *Client {
+	c.fastMode = fast
+	return c
+}
+
 // WithTimeout sets the request timeout
 func (c *Client) WithTimeout(timeout time.Duration) *Client {
 	c.timeout = timeout
@@ -60,6 +68,7 @@ func (c *Client) WithTimeout(timeout time.Duration) *Client {
 type MessageRequest struct {
 	Model     string    `json:"model"`
 	MaxTokens int       `json:"max_tokens"`
+	Speed     string    `json:"speed,omitempty"`
 	System    string    `json:"system,omitempty"`
 	Messages  []Message `json:"messages"`
 }
@@ -141,6 +150,9 @@ func (c *Client) Prompt(ctx context.Context, prompt string, opts *PromptOptions)
 			{Role: "user", Content: prompt},
 		},
 	}
+	if c.fastMode {
+		req.Speed = "fast"
+	}
 
 	resp, err := c.sendRequest(ctx, req)
 	if err != nil {
@@ -182,6 +194,9 @@ func (c *Client) PromptWithUsage(ctx context.Context, prompt string, opts *Promp
 			{Role: "user", Content: prompt},
 		},
 	}
+	if c.fastMode {
+		req.Speed = "fast"
+	}
 
 	resp, err := c.sendRequest(ctx, req)
 	if err != nil {
@@ -197,6 +212,204 @@ func (c *Client) PromptWithUsage(ctx context.Context, prompt string, opts *Promp
 	}
 
 	return text, &resp.Usage, nil
+}
+
+// StreamCallback is called with each chunk of text as it's generated
+type StreamCallback func(chunk string)
+
+// PromptStream sends a prompt and streams the response text via callback.
+// Returns the full response text when complete.
+func (c *Client) PromptStream(ctx context.Context, prompt string, opts *PromptOptions, onChunk StreamCallback) (string, error) {
+	if opts == nil {
+		opts = &PromptOptions{}
+	}
+
+	maxTokens := opts.MaxTokens
+	if maxTokens == 0 {
+		maxTokens = defaultMaxTokens
+	}
+
+	model := opts.Model
+	if model == "" {
+		model = c.model
+	}
+
+	req := MessageRequest{
+		Model:     model,
+		MaxTokens: maxTokens,
+		System:    opts.SystemPrompt,
+		Messages: []Message{
+			{Role: "user", Content: prompt},
+		},
+	}
+	if c.fastMode {
+		req.Speed = "fast"
+	}
+
+	if c.useNative {
+		return c.streamViaCLI(ctx, req, onChunk)
+	}
+	return c.streamViaHTTP(ctx, req, onChunk)
+}
+
+// streamViaCLI streams responses using the claude CLI with stream-json output
+func (c *Client) streamViaCLI(ctx context.Context, req MessageRequest, onChunk StreamCallback) (string, error) {
+	var prompt strings.Builder
+	if req.System != "" {
+		prompt.WriteString("System: ")
+		prompt.WriteString(req.System)
+		prompt.WriteString("\n\n")
+	}
+	for _, msg := range req.Messages {
+		prompt.WriteString(msg.Content)
+	}
+
+	args := []string{"--print", "--output-format", "stream-json", "--verbose",
+		"--include-partial-messages", "--model", req.Model}
+	if req.Speed == "fast" {
+		args = append(args, "--settings", `{"fastMode": true}`)
+	}
+	args = append(args, prompt.String())
+	cmd := exec.CommandContext(ctx, "claude", args...)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+	cmd.Stderr = io.Discard
+
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("failed to start claude CLI: %w", err)
+	}
+
+	var fullText string
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		var event struct {
+			Type  string `json:"type"`
+			Event struct {
+				Type  string `json:"type"`
+				Delta struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"delta"`
+			} `json:"event"`
+			Result string `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			continue
+		}
+
+		switch event.Type {
+		case "stream_event":
+			if event.Event.Type == "content_block_delta" && event.Event.Delta.Type == "text_delta" {
+				fullText += event.Event.Delta.Text
+				if onChunk != nil {
+					onChunk(event.Event.Delta.Text)
+				}
+			}
+		case "result":
+			if event.Result != "" && len(event.Result) > len(fullText) {
+				remaining := event.Result[len(fullText):]
+				if onChunk != nil {
+					onChunk(remaining)
+				}
+				fullText = event.Result
+			}
+		}
+	}
+
+	if err := cmd.Wait(); err != nil {
+		if fullText != "" {
+			return fullText, nil // Got partial output, return it
+		}
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return "", fmt.Errorf("claude CLI failed: %s", string(exitErr.Stderr))
+		}
+		return "", fmt.Errorf("claude CLI failed: %w", err)
+	}
+
+	return fullText, nil
+}
+
+// streamViaHTTP streams responses using the Anthropic streaming API
+func (c *Client) streamViaHTTP(ctx context.Context, req MessageRequest, onChunk StreamCallback) (string, error) {
+	// Add stream flag
+	type streamRequest struct {
+		MessageRequest
+		Stream bool `json:"stream"`
+	}
+	sreq := streamRequest{MessageRequest: req, Stream: true}
+
+	body, err := json.Marshal(sreq)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", anthropicAPIURL, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-api-key", c.apiKey)
+	httpReq.Header.Set("anthropic-version", anthropicVersion)
+	if c.fastMode {
+		httpReq.Header.Set("anthropic-beta", "fast-mode-2026-02-01")
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		var errResp ErrorResponse
+		if err := json.Unmarshal(respBody, &errResp); err == nil {
+			return "", &errResp.Error
+		}
+		return "", fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	// Parse SSE stream
+	var fullText string
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := line[6:]
+		if data == "[DONE]" {
+			break
+		}
+
+		var event struct {
+			Type  string `json:"type"`
+			Delta struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"delta"`
+		}
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			continue
+		}
+
+		if event.Type == "content_block_delta" && event.Delta.Type == "text_delta" {
+			fullText += event.Delta.Text
+			if onChunk != nil {
+				onChunk(event.Delta.Text)
+			}
+		}
+	}
+
+	return fullText, nil
 }
 
 // sendRequest sends a request to the Anthropic API
@@ -224,6 +437,9 @@ func (c *Client) sendRequestViaHTTP(ctx context.Context, req MessageRequest) (*M
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", c.apiKey)
 	httpReq.Header.Set("anthropic-version", anthropicVersion)
+	if c.fastMode {
+		httpReq.Header.Set("anthropic-beta", "fast-mode-2026-02-01")
+	}
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -266,7 +482,12 @@ func (c *Client) sendRequestViaCLI(ctx context.Context, req MessageRequest) (*Me
 	}
 
 	// Use claude CLI with --print flag for non-interactive output
-	cmd := exec.CommandContext(ctx, "claude", "--print", "--model", req.Model, prompt.String())
+	args := []string{"--print", "--model", req.Model}
+	if req.Speed == "fast" {
+		args = append(args, "--settings", `{"fastMode": true}`)
+	}
+	args = append(args, prompt.String())
+	cmd := exec.CommandContext(ctx, "claude", args...)
 
 	output, err := cmd.Output()
 	if err != nil {

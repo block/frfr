@@ -9,6 +9,7 @@ function SettingsModal({ onClose }: Props) {
   const [settings, setSettings] = useState<AppSettings>({
     workingPath: '',
     anthropicApiKey: '',
+    fastMode: false,
   });
   const [defaultPath, setDefaultPath] = useState('');
   const [claudeNative, setClaudeNative] = useState<ClaudeNativeStatus | null>(null);
@@ -182,6 +183,69 @@ function SettingsModal({ onClose }: Props) {
                   </p>
                 </>
               )}
+            </div>
+
+            {/* Model Speed */}
+            <div className="form-group">
+              <label className="form-label">Model</label>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.75rem',
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSettings((s) => ({ ...s, fastMode: !s.fastMode }))
+                  }
+                  style={{
+                    position: 'relative',
+                    width: '44px',
+                    height: '24px',
+                    borderRadius: '12px',
+                    border: 'none',
+                    backgroundColor: settings.fastMode
+                      ? 'var(--color-primary)'
+                      : 'var(--color-border)',
+                    cursor: 'pointer',
+                    transition: 'background-color 0.2s',
+                    padding: 0,
+                    flexShrink: 0,
+                  }}
+                >
+                  <span
+                    style={{
+                      position: 'absolute',
+                      top: '2px',
+                      left: settings.fastMode ? '22px' : '2px',
+                      width: '20px',
+                      height: '20px',
+                      borderRadius: '50%',
+                      backgroundColor: 'white',
+                      transition: 'left 0.2s',
+                    }}
+                  />
+                </button>
+                <span style={{ fontSize: '0.875rem' }}>
+                  {settings.fastMode ? 'Fast' : 'Normal'}
+                </span>
+                <span
+                  className="text-xs text-muted"
+                  style={{ marginLeft: 'auto' }}
+                >
+                  claude-opus-4-6
+                </span>
+              </div>
+              <p
+                className="text-xs text-muted"
+                style={{ marginTop: '0.375rem' }}
+              >
+                {settings.fastMode
+                  ? 'Same fidelity, faster output (higher cost)'
+                  : 'Standard speed (default)'}
+              </p>
             </div>
           </div>
         )}
