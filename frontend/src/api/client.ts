@@ -14,6 +14,7 @@ import type {
   BatchProgress,
   QueryStreamCallbacks,
   ClaudeStatusResponse,
+  SourceEvidence,
 } from './types';
 import '../types/electron.d.ts';
 
@@ -232,6 +233,9 @@ class APIClient {
                     break;
                   case 'answer_chunk':
                     callbacks.onAnswerChunk?.(parsed.text);
+                    break;
+                  case 'sources':
+                    callbacks.onSources?.(parsed as SourceEvidence[]);
                     break;
                   case 'result':
                     callbacks.onResult?.(parsed as QueryResponse);

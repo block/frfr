@@ -11,6 +11,7 @@ interface Props {
   batchProgress: BatchProgress | null;
   totalFacts: number | null;
   streamingAnswer?: string;
+  streamingSources?: SourceEvidence[];
 }
 
 // Parse answer text and make citation references clickable
@@ -103,7 +104,7 @@ function renderAnswerWithCitations(
   return parts;
 }
 
-function QueryInterface({ onSubmit, loading, error, response, onSourceClick, selectedSourceIndex, batchProgress, totalFacts, streamingAnswer }: Props) {
+function QueryInterface({ onSubmit, loading, error, response, onSourceClick, selectedSourceIndex, batchProgress, totalFacts, streamingAnswer, streamingSources }: Props) {
   const [query, setQuery] = useState('');
 
   // Get the fact_index of the currently selected source for highlighting
@@ -253,7 +254,9 @@ function QueryInterface({ onSubmit, loading, error, response, onSourceClick, sel
           ) : (
             streamingAnswer ? (
               <div className="mt-2" style={{ lineHeight: '1.6', whiteSpace: 'pre-wrap' }}>
-                {streamingAnswer}
+                {streamingSources && streamingSources.length > 0
+                  ? renderAnswerWithCitations(streamingAnswer, streamingSources, onSourceClick, null)
+                  : streamingAnswer}
                 <span style={{ animation: 'pulse 1s infinite', opacity: 0.6 }}>&#9608;</span>
               </div>
             ) : (

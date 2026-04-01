@@ -309,30 +309,12 @@ func (h *QueryHandler) SubmitStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Signal answering phase so the UI shows streaming text
-	sendEvent("progress", query.BatchProgress{
-		Phase:      "answering",
-		FactsFound: len(relevantFacts),
-	})
+	// Build sources now so we can send them before streaming starts
+	builtSources := processor.BuildSources(relevantFacts)
 
-	// Step 2: Stream the answer generation
-	answer, err := processor.GenerateAnswerStream(ctx, req.Query, relevantFacts, func(chunk string) {
-		sendEvent("answer_chunk", map[string]string{"text": chunk})
-	})
-	if err != nil {
-		// Fallback to simple answer
-		answer = processor.SimpleFallbackAnswer(req.Query, relevantFacts)
-	}
-
-	result := &query.QueryResult{
-		Query:   req.Query,
-		Answer:  answer,
-		Sources: processor.BuildSources(relevantFacts),
-	}
-
-	// Convert to response format
+	// Convert to response format early for citation rendering during streaming
 	var sources []SourceEvidence
-	for _, src := range result.Sources {
+	for _, src := range builtSources {
 		source := SourceEvidence{
 			FactIndex:  src.FactIndex,
 			Claim:      src.Claim,
@@ -407,12 +389,29 @@ func (h *QueryHandler) SubmitStream(w http.ResponseWriter, r *http.Request) {
 		sources = append(sources, source)
 	}
 
+	// Send sources early so citations render during streaming
+	sendEvent("sources", sources)
+
+	// Signal answering phase so the UI shows streaming text
+	sendEvent("progress", query.BatchProgress{
+		Phase:      "answering",
+		FactsFound: len(relevantFacts),
+	})
+
+	// Step 2: Stream the answer generation
+	answer, err := processor.GenerateAnswerStream(ctx, req.Query, relevantFacts, func(chunk string) {
+		sendEvent("answer_chunk", map[string]string{"text": chunk})
+	})
+	if err != nil {
+		answer = processor.SimpleFallbackAnswer(req.Query, relevantFacts)
+	}
+
 	duration := time.Since(start)
 
 	// Store in history
 	historyEntry := models.QueryHistoryEntry{
 		Query:     req.Query,
-		Answer:    result.Answer,
+		Answer:    answer,
 		Timestamp: time.Now(),
 	}
 	for _, s := range sources {
@@ -423,7 +422,7 @@ func (h *QueryHandler) SubmitStream(w http.ResponseWriter, r *http.Request) {
 	// Send final result
 	sendEvent("result", QueryResponse{
 		Query:    req.Query,
-		Answer:   result.Answer,
+		Answer:   answer,
 		Sources:  sources,
 		Duration: duration.String(),
 	})

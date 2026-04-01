@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../api/client';
-import type { QueryResponse, QueryHistoryEntry, BatchProgress } from '../api/types';
+import type { QueryResponse, QueryHistoryEntry, BatchProgress, SourceEvidence } from '../api/types';
 import QueryInterface from '../components/query/QueryInterface';
 import SourceContextPanel from '../components/query/SourceContextPanel';
 
@@ -15,6 +15,7 @@ function QueryPage() {
   const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
   const [totalFacts, setTotalFacts] = useState<number | null>(null);
   const [streamingAnswer, setStreamingAnswer] = useState<string>('');
+  const [streamingSources, setStreamingSources] = useState<SourceEvidence[]>([]);
   const abortRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -50,6 +51,7 @@ function QueryPage() {
     setBatchProgress(null);
     setTotalFacts(null);
     setStreamingAnswer('');
+    setStreamingSources([]);
 
     abortRef.current = api.submitQueryStream(sessionId, { query }, {
       onStatus: (status) => {
@@ -60,12 +62,16 @@ function QueryPage() {
       onProgress: (progress) => {
         setBatchProgress(progress);
       },
+      onSources: (sources) => {
+        setStreamingSources(sources);
+      },
       onAnswerChunk: (chunk) => {
         setStreamingAnswer((prev) => prev + chunk);
       },
       onResult: (result) => {
         setCurrentResponse(result);
         setStreamingAnswer('');
+        setStreamingSources([]);
         setLoading(false);
         setBatchProgress(null);
         loadHistory();
@@ -102,6 +108,7 @@ function QueryPage() {
             batchProgress={batchProgress}
             totalFacts={totalFacts}
             streamingAnswer={streamingAnswer}
+            streamingSources={streamingSources}
           />
 
           {/* History */}
