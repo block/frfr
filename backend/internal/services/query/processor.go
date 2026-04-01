@@ -23,17 +23,29 @@ type BatchProgress struct {
 // ProgressCallback is called to report query progress
 type ProgressCallback func(BatchProgress)
 
+// ConversationTurn represents a prior question and answer in the conversation
+type ConversationTurn struct {
+	Query  string
+	Answer string
+}
+
 // Processor handles query processing using facts and Claude API
 type Processor struct {
-	client       *claude.Client
-	chunkManager *ChunkManager
-	facts        []models.ExtractedFact
-	onProgress   ProgressCallback
+	client              *claude.Client
+	chunkManager        *ChunkManager
+	facts               []models.ExtractedFact
+	onProgress          ProgressCallback
+	conversationHistory []ConversationTurn
 }
 
 // SetProgressCallback sets the callback for progress updates
 func (p *Processor) SetProgressCallback(cb ProgressCallback) {
 	p.onProgress = cb
+}
+
+// SetConversationHistory provides prior Q&A turns so follow-up questions can reference earlier context
+func (p *Processor) SetConversationHistory(history []ConversationTurn) {
+	p.conversationHistory = history
 }
 
 // NewProcessor creates a new query processor
@@ -252,6 +264,21 @@ func (p *Processor) selectRelevantFactsWithLLM(ctx context.Context, query string
 func (p *Processor) evaluateFactBatch(ctx context.Context, query string, startIdx, endIdx int) ([]int, error) {
 	var sb strings.Builder
 	sb.WriteString("You are analyzing extracted facts from compliance/audit documents to find ones relevant to a user's question.\n\n")
+
+	// Include conversation history so follow-up questions can be understood in context
+	if len(p.conversationHistory) > 0 {
+		sb.WriteString("Conversation so far:\n")
+		for _, turn := range p.conversationHistory {
+			sb.WriteString(fmt.Sprintf("User: %s\n", turn.Query))
+			// Include a truncated answer to keep the prompt reasonable
+			answer := turn.Answer
+			if len(answer) > 300 {
+				answer = answer[:300] + "..."
+			}
+			sb.WriteString(fmt.Sprintf("Assistant: %s\n\n", answer))
+		}
+	}
+
 	sb.WriteString(fmt.Sprintf("Question: %s\n\n", query))
 	sb.WriteString("Think broadly about relevance. For example:\n")
 	sb.WriteString("- Questions about 'employee onboarding' relate to: hiring, background checks, training, orientation, access provisioning\n")
@@ -542,7 +569,18 @@ func (p *Processor) GenerateAnswerStream(ctx context.Context, query string, fact
 // buildAnswerPrompt builds the prompt for answer generation
 func (p *Processor) buildAnswerPrompt(query string, facts []models.ExtractedFact) string {
 	var sb strings.Builder
-	sb.WriteString("Based on the following extracted facts from official documents, answer this question:\n\n")
+	sb.WriteString("Based on the following extracted facts from official documents, answer this question.\n\n")
+
+	// Include conversation history so follow-up questions make sense
+	if len(p.conversationHistory) > 0 {
+		sb.WriteString("Conversation so far:\n")
+		for _, turn := range p.conversationHistory {
+			sb.WriteString(fmt.Sprintf("User: %s\n", turn.Query))
+			sb.WriteString(fmt.Sprintf("Assistant: %s\n\n", turn.Answer))
+		}
+		sb.WriteString("Now answer the follow-up question using the facts below.\n\n")
+	}
+
 	sb.WriteString(fmt.Sprintf("Question: %s\n\n", query))
 	sb.WriteString("Available Facts:\n")
 
