@@ -109,6 +109,11 @@ func (h *QueryHandler) Submit(w http.ResponseWriter, r *http.Request) {
 	chunkManager.LoadChunks() // Load chunks for context retrieval
 	processor := query.NewProcessor(claudeClient, chunkManager, facts)
 
+	// Pass conversation history so follow-up questions work
+	if hist := h.history[sessionID]; len(hist) > 0 {
+		processor.SetConversationHistory(h.buildConversationHistory(sessionID))
+	}
+
 	// Process query with Claude
 	ctx := context.Background()
 	maxPasses := req.MaxPasses
@@ -285,6 +290,11 @@ func (h *QueryHandler) SubmitStream(w http.ResponseWriter, r *http.Request) {
 	chunkManager.LoadChunks()
 	processor := query.NewProcessor(claudeClient, chunkManager, facts)
 
+	// Pass conversation history so follow-up questions work
+	if hist := h.history[sessionID]; len(hist) > 0 {
+		processor.SetConversationHistory(h.buildConversationHistory(sessionID))
+	}
+
 	// Set progress callback to stream batch updates
 	processor.SetProgressCallback(func(progress query.BatchProgress) {
 		sendEvent("progress", progress)
@@ -452,6 +462,25 @@ func (h *QueryHandler) History(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, history)
+}
+
+// buildConversationHistory converts in-memory query history to conversation turns for the processor.
+// Limits to the last 10 turns to keep prompts reasonable.
+func (h *QueryHandler) buildConversationHistory(sessionID string) []query.ConversationTurn {
+	hist := h.history[sessionID]
+	// Take at most the last 10 turns
+	start := 0
+	if len(hist) > 10 {
+		start = len(hist) - 10
+	}
+	turns := make([]query.ConversationTurn, 0, len(hist)-start)
+	for _, entry := range hist[start:] {
+		turns = append(turns, query.ConversationTurn{
+			Query:  entry.Query,
+			Answer: entry.Answer,
+		})
+	}
+	return turns
 }
 
 // findQuoteWithNormalizedWhitespace finds a quote in text by normalizing whitespace.
