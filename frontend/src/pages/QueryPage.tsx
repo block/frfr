@@ -137,21 +137,25 @@ function QueryPage() {
         </div>
 
         {/* Source context panel - sticky */}
-        {currentResponse && selectedSourceIndex !== null && (
-          <div style={{
-            width: '40%',
-            position: 'sticky',
-            top: 0,
-            alignSelf: 'flex-start',
-            maxHeight: '100%',
-            overflowY: 'auto'
-          }}>
-            <SourceContextPanel
-              source={currentResponse.sources[selectedSourceIndex]}
-              onClose={() => setSelectedSourceIndex(null)}
-            />
-          </div>
-        )}
+        {selectedSourceIndex !== null && (() => {
+          const sources = currentResponse?.sources ?? streamingSources;
+          const source = sources?.[selectedSourceIndex];
+          return source ? (
+            <div style={{
+              width: '40%',
+              position: 'sticky',
+              top: 0,
+              alignSelf: 'flex-start',
+              maxHeight: '100%',
+              overflowY: 'auto'
+            }}>
+              <SourceContextPanel
+                source={source}
+                onClose={() => setSelectedSourceIndex(null)}
+              />
+            </div>
+          ) : null;
+        })()}
       </div>
     </div>
   );
